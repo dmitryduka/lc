@@ -9,8 +9,7 @@ using std::endl;
 
 struct Cell
 {
-    enum CellType { Symbol, Func, Int, List, Nil, Unknown }
-    type;
+    enum CellType { Symbol, Func, Int, List, Nil, Unknown } type;
     typedef Cell (*FuncType)(const Cell&, Env&);
     union
     {
@@ -62,97 +61,14 @@ struct Cell
 
 static Cell Nil(Cell::Nil);
 
-struct AddOp
-{
-    int operator()(int x, int y)
-    {
-        return x + y;
-    }
-};
-struct MinusOp
-{
-    int operator()(int x, int y)
-    {
-        return x - y;
-    }
-};
-struct MulOp
-{
-    int operator()(int x, int y)
-    {
-        return x * y;
-    }
-};
-struct DivOp
-{
-    int operator()(int x, int y)
-    {
-        return x / y;
-    }
-};
-struct BitwiseAndOp
-{
-    int operator()(int x, int y)
-    {
-        return x & y;
-    }
-};
-struct BitwiseOrOp
-{
-    int operator()(int x, int y)
-    {
-        return x | y;
-    }
-};
-struct BitwiseXorOp
-{
-    int operator()(int x, int y)
-    {
-        return x ^ y;
-    }
-};
-struct MaxOp
-{
-    int operator()(int x, int y)
-    {
-        return x > y ? x : y;
-    }
-};
-struct MinOp
-{
-    int operator()(int x, int y)
-    {
-        return x < y ? x : y;
-    }
-};
-struct EqOp
-{
-    int operator()(int x, int y)
-    {
-        return x == y ? 1 : 0;
-    }
-};
-struct LessOp
-{
-    int operator()(int x, int y)
-    {
-        return x < y ? 1 : 0;
-    }
-};
-struct NotEqOp
-{
-    int operator()(int x, int y)
-    {
-        return x != y ? 1 : 0;
-    }
-};
-struct MoreOp
-{
-    int operator()(int x, int y)
-    {
-        return x > y ? 1 : 0;
-    }
-};
+struct AddOp {  int operator()(int x, int y) { return x + y; } };
+struct MinusOp { int operator()(int x, int y) { return x - y; } };
+struct MulOp { int operator()(int x, int y) { return x * y; } };
+struct DivOp { int operator()(int x, int y) { return x / y; } };
+struct EqOp { int operator()(int x, int y) { return x == y ? 1 : 0; } };
+struct NotEqOp { int operator()(int x, int y) { return x != y ? 1 : 0; } };
+struct LessOp { int operator()(int x, int y) { return x < y ? 1 : 0; } };
+struct MoreOp { int operator()(int x, int y) { return x > y ? 1 : 0; } };
 
 template<typename Op>
 Cell binary_func(const Cell& cell, Env& env)
@@ -167,20 +83,17 @@ Cell binary_func(const Cell& cell, Env& env)
     return result;
 }
 
-
 Cell null_func(const Cell& cell, Env& env)
 {
     // checks at least one argument is Nil
     if (cell.list.size() > 1)
     {
         for (int i = 1; i < cell.list.size(); ++i)
-                                 // return true
-            if (cell.list[i].eval(env).type == Cell::Nil) return Cell(1);
+            if (cell.list[i].eval(env).type == Cell::Nil) return Cell(1); // return true
         return Cell(0);          // return false otherwise
     }
     return Nil;
 }
-
 
 Cell cond_func(const Cell& cell, Env& env)
 {
@@ -194,17 +107,13 @@ Cell cond_func(const Cell& cell, Env& env)
     }
 }
 
-
 Cell lambda_func(const Cell& cell, Env& env)
 {
     Cell result(Cell::Func);
-                                 // push formal argument names (that'll be a list of symbols)
-    result.list.push_back(cell.list[1]);
-                                 // push lambda body
-    result.list.push_back(cell.list[2]);
+    result.list.push_back(cell.list[1]); // push formal argument names (that'll be a list of symbols)
+    result.list.push_back(cell.list[2]); // push lambda body
     return result;
 }
-
 
 Cell car_func(const Cell& cell, Env& env)
 {
@@ -213,7 +122,6 @@ Cell car_func(const Cell& cell, Env& env)
     if (result.list.empty()) return Nil;
     return result.list[0];
 }
-
 
 Cell cdr_func(const Cell& cell, Env& env)
 {
@@ -229,7 +137,6 @@ Cell cdr_func(const Cell& cell, Env& env)
     return Nil;
 }
 
-
 Cell list_func(const Cell& cell, Env& env)
 {
     Cell result(Cell::List);
@@ -237,7 +144,6 @@ Cell list_func(const Cell& cell, Env& env)
         result.list.push_back(cell.list[i].eval(env));
     return result;
 }
-
 
 Cell append_func(const Cell& cell, Env& env)
 {
@@ -251,7 +157,6 @@ Cell append_func(const Cell& cell, Env& env)
     }
     return result;
 }
-
 
 Cell set_func(const Cell& cell, Env& env);
 Cell define_func(const Cell& cell, Env& env);
@@ -276,21 +181,16 @@ struct Env
     static Env global()
     {
         Env env;
-        // initialize new global env with special forms
+        // initialize new global env with special forms and symbols
         env.data["Nil"] = Nil;
         env.data["+"] = Cell(&binary_func<AddOp>);
         env.data["-"] = Cell(&binary_func<MinusOp>);
         env.data["*"] = Cell(&binary_func<MulOp>);
         env.data["/"] = Cell(&binary_func<DivOp>);
-        env.data["and"] = Cell(&binary_func<BitwiseAndOp>);
-        env.data["or"] = Cell(&binary_func<BitwiseOrOp>);
-        env.data["xor"] = Cell(&binary_func<BitwiseXorOp>);
-        env.data["max"] = Cell(&binary_func<MaxOp>);
         env.data["eq"] = Cell(&binary_func<EqOp>);
         env.data["less"] = Cell(&binary_func<LessOp>);
         env.data["neq"] = Cell(&binary_func<NotEqOp>);
         env.data["more"] = Cell(&binary_func<MoreOp>);
-        env.data["min"] = Cell(&binary_func<MinOp>);
         env.data["null?"] = Cell(&null_func);
         env.data["define"] = Cell(&define_func);
         env.data["cond"] = Cell(&cond_func);
@@ -306,7 +206,7 @@ struct Env
 
 Cell set_func(const Cell& cell, Env& env)
 {
-    // TODO: handle quotes
+    // TODO: doesn't handle quotes
     if ((cell.list.size() == 3) &&
         (env.lookup(cell.list[1].name) != Nil))
     {
@@ -316,14 +216,12 @@ Cell set_func(const Cell& cell, Env& env)
     return Nil;
 }
 
-
 Cell define_func(const Cell& cell, Env& env)
 {
     if (cell.list.size() < 3) return Nil;
     env.set(cell.list[1].name, cell.list[2].eval(env));
     return Cell(cell.list[1].name);
 }
-
 
 void Cell::pretty_print(size_t tabs_no) const
 {
@@ -342,7 +240,6 @@ void Cell::pretty_print(size_t tabs_no) const
     else cout << endl;
 }
 
-
 Cell Cell::eval(Env& env) const
 {
     if (type == Int) return *this;
@@ -354,10 +251,8 @@ Cell Cell::eval(Env& env) const
         const Cell car = list[0].eval(env);
         if (car.type == Func)
         {
-                                 // that's built-in function
-            if (car.func) return car.func(*this, env);
-                                 // that's lambda
-            else if (car.list.size() == 2)
+            if (car.func) return car.func(*this, env); // that's built-in function
+            else if (car.list.size() == 2) // that's lambda
             {
                 const Cell& args = car.list[0];
                 Env local_env(&env);
@@ -383,7 +278,6 @@ Cell Cell::eval(Env& env) const
     }
 }
 
-
 Cell parse_list(const char* input, const char** jumped_to = NULL)
 {
     if (input)
@@ -396,9 +290,7 @@ Cell parse_list(const char* input, const char** jumped_to = NULL)
         {
             const char c = *cur;
             if (c == '(')
-            {
                 cell.list.push_back(parse_list(++cur, &cur));
-            }
             else if (c == ')' || c == ' ' || c == '\t' || c == '\n')
             {
                 if (symbol_ready)
