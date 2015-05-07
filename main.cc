@@ -1,21 +1,24 @@
 #include <iostream>
 #include <vector>
+#include <memory>
 #include <unordered_map>
 
 struct Env;
 
 using std::cout;
 using std::endl;
+using std::shared_ptr;
 
 struct Cell
 {
     enum CellType { Symbol, Func, Int, List, Nil, Unknown } type;
-    typedef Cell (*FuncType)(const Cell&, Env&);
+    typedef Cell (*FuncType)(const Cell&, shared_ptr<Env>);
     union
     {
         int as_int;
         FuncType func;
     };
+    shared_ptr<Env> bound_env;
     std::vector<Cell> list;
     std::string name;
 
@@ -46,7 +49,7 @@ struct Cell
     }
 
     void pretty_print(size_t tabs_no = 1) const;
-    Cell eval(Env& env) const;
+    Cell eval(shared_ptr<Env> env) const;
 
     static std::string type_to_string(const CellType type)
     {
@@ -71,7 +74,7 @@ struct LessOp { int operator()(int x, int y) { return x < y ? 1 : 0; } };
 struct MoreOp { int operator()(int x, int y) { return x > y ? 1 : 0; } };
 
 template<typename Op>
-Cell binary_func(const Cell& cell, Env& env)
+Cell binary_func(const Cell& cell, shared_ptr<Env> env)
 {
     // should have at least 3 cells inside (op arg1 arg2)
     if (cell.list.size() < 3) return Cell(Cell::Nil);
@@ -83,7 +86,7 @@ Cell binary_func(const Cell& cell, Env& env)
     return result;
 }
 
-Cell null_func(const Cell& cell, Env& env)
+Cell null_func(const Cell& cell, shared_ptr<Env> env)
 {
     // checks at least one argument is Nil
     if (cell.list.size() > 1)
@@ -95,7 +98,7 @@ Cell null_func(const Cell& cell, Env& env)
     return Nil;
 }
 
-Cell cond_func(const Cell& cell, Env& env)
+Cell cond_func(const Cell& cell, shared_ptr<Env> env)
 {
     // doesn't handle no true predicate case
     if (cell.list.size() < 3) return Nil;
@@ -107,7 +110,7 @@ Cell cond_func(const Cell& cell, Env& env)
     }
 }
 
-Cell lambda_func(const Cell& cell, Env& env)
+Cell lambda_func(const Cell& cell, shared_ptr<Env> env)
 {
     Cell result(Cell::Func);
     result.list.push_back(cell.list[1]); // push formal argument names (that'll be a list of symbols)
@@ -115,7 +118,7 @@ Cell lambda_func(const Cell& cell, Env& env)
     return result;
 }
 
-Cell car_func(const Cell& cell, Env& env)
+Cell car_func(const Cell& cell, shared_ptr<Env> env)
 {
     if (cell.list.size() != 2) return Nil;
     const Cell& result = cell.list[1].eval(env);
@@ -123,7 +126,7 @@ Cell car_func(const Cell& cell, Env& env)
     return result.list[0];
 }
 
-Cell cdr_func(const Cell& cell, Env& env)
+Cell cdr_func(const Cell& cell, shared_ptr<Env> env)
 {
     if (cell.list.size() != 2) return Nil;
     const Cell& source = cell.list[1].eval(env);
@@ -137,7 +140,7 @@ Cell cdr_func(const Cell& cell, Env& env)
     return Nil;
 }
 
-Cell list_func(const Cell& cell, Env& env)
+Cell list_func(const Cell& cell, shared_ptr<Env> env)
 {
     Cell result(Cell::List);
     for (int i = 1; i < cell.list.size(); ++i)
@@ -145,7 +148,7 @@ Cell list_func(const Cell& cell, Env& env)
     return result;
 }
 
-Cell append_func(const Cell& cell, Env& env)
+Cell append_func(const Cell& cell, shared_ptr<Env> env)
 {
     Cell result(Cell::List);
     for (int i = 1; i < cell.list.size(); ++i)
@@ -158,16 +161,26 @@ Cell append_func(const Cell& cell, Env& env)
     return result;
 }
 
-Cell set_func(const Cell& cell, Env& env);
-Cell define_func(const Cell& cell, Env& env);
+Cell let_func(const Cell& cell, shared_ptr<Env> env);
+
+Cell begin_func(const Cell& cell, shared_ptr<Env> env)
+{
+    // TODO: add checks
+    for (int i = 0; i < cell.list.size() - 1; ++i)
+        cell.list[i].eval(env);
+    return cell.list[cell.list.size() - 1].eval(env);
+}
+
+Cell set_func(const Cell& cell, shared_ptr<Env> env);
+Cell define_func(const Cell& cell, shared_ptr<Env> env);
 
 struct Env
 {
     std::unordered_map<std::string, Cell> data;
-    Env* outer;
+    shared_ptr<Env> outer;
 
     Env() : outer(NULL) {}
-    Env(Env* outer_env) : outer(outer_env) {}
+    Env(shared_ptr<Env> outer_env) : outer(outer_env) {}
 
     Cell& lookup(const std::string& name)
     {
@@ -176,52 +189,70 @@ struct Env
         else return Nil;         // unbound variable, should cause error here
     }
 
-    void set(const std::string& name, const Cell& cell) { data[name] = cell; }
-
-    static Env global()
+    void set(const std::string& name, const Cell& cell) 
     {
-        Env env;
+        data[name] = cell;
+    }
+
+    static shared_ptr<Env> global()
+    {
+        shared_ptr<Env> env(new Env);
         // initialize new global env with special forms and symbols
-        env.data["Nil"] = Nil;
-        env.data["+"] = Cell(&binary_func<AddOp>);
-        env.data["-"] = Cell(&binary_func<MinusOp>);
-        env.data["*"] = Cell(&binary_func<MulOp>);
-        env.data["/"] = Cell(&binary_func<DivOp>);
-        env.data["eq"] = Cell(&binary_func<EqOp>);
-        env.data["less"] = Cell(&binary_func<LessOp>);
-        env.data["neq"] = Cell(&binary_func<NotEqOp>);
-        env.data["more"] = Cell(&binary_func<MoreOp>);
-        env.data["null?"] = Cell(&null_func);
-        env.data["define"] = Cell(&define_func);
-        env.data["cond"] = Cell(&cond_func);
-        env.data["set"] = Cell(&set_func);
-        env.data["lambda"] = Cell(&lambda_func);
-        env.data["list"] = Cell(&list_func);
-        env.data["car"] = Cell(&car_func);
-        env.data["cdr"] = Cell(&cdr_func);
-        env.data["append"] = Cell(&append_func);
+        env->data["Nil"] = Nil;
+        env->data["+"] = Cell(&binary_func<AddOp>);
+        env->data["-"] = Cell(&binary_func<MinusOp>);
+        env->data["*"] = Cell(&binary_func<MulOp>);
+        env->data["/"] = Cell(&binary_func<DivOp>);
+        env->data["eq"] = Cell(&binary_func<EqOp>);
+        env->data["less"] = Cell(&binary_func<LessOp>);
+        env->data["neq"] = Cell(&binary_func<NotEqOp>);
+        env->data["more"] = Cell(&binary_func<MoreOp>);
+        env->data["null?"] = Cell(&null_func);
+        env->data["define"] = Cell(&define_func);
+        env->data["cond"] = Cell(&cond_func);
+        env->data["set"] = Cell(&set_func);
+        env->data["lambda"] = Cell(&lambda_func);
+        env->data["list"] = Cell(&list_func);
+        env->data["car"] = Cell(&car_func);
+        env->data["cdr"] = Cell(&cdr_func);
+        env->data["append"] = Cell(&append_func);
+        env->data["let"] = Cell(&let_func);
+        env->data["begin"] = Cell(&begin_func);
         return env;
     }
 };
 
-Cell set_func(const Cell& cell, Env& env)
+Cell set_func(const Cell& cell, shared_ptr<Env> env)
 {
     // TODO: doesn't handle quotes
     if ((cell.list.size() == 3) &&
-        (env.lookup(cell.list[1].name) != Nil))
+        (env->lookup(cell.list[1].name) != Nil))
     {
-        env.set(cell.list[1].name, cell.list[2].eval(env));
+        env->lookup(cell.list[1].name) = cell.list[2].eval(env);
         return Cell(cell.list[1].name);
     }
     return Nil;
 }
 
-Cell define_func(const Cell& cell, Env& env)
+Cell define_func(const Cell& cell, shared_ptr<Env> env)
 {
     if (cell.list.size() < 3) return Nil;
-    env.set(cell.list[1].name, cell.list[2].eval(env));
+    env->set(cell.list[1].name, cell.list[2].eval(env));
     return Cell(cell.list[1].name);
 }
+
+Cell let_func(const Cell& cell, shared_ptr<Env> env)
+{
+    shared_ptr<Env> local_env(new Env(env));
+    for (int i = 0; i < cell.list[1].list.size(); ++i)
+    {
+        local_env->set(cell.list[1].list[i].list[0].name, cell.list[1].list[i].list[1]);
+    }
+    Cell result = cell.list[2].eval(local_env);
+    result.bound_env = local_env;
+    return result;
+}
+
 
 void Cell::pretty_print(size_t tabs_no) const
 {
@@ -240,11 +271,11 @@ void Cell::pretty_print(size_t tabs_no) const
     else cout << endl;
 }
 
-Cell Cell::eval(Env& env) const
+Cell Cell::eval(shared_ptr<Env> env) const
 {
     if (type == Int) return *this;
     else if (type == Nil) return Nil;
-    else if (type == Symbol) return env.lookup(name);
+    else if (type == Symbol) return env->lookup(name);
     else if (type == List)
     {
         if (list.empty()) return Cell(Nil);
@@ -255,18 +286,24 @@ Cell Cell::eval(Env& env) const
             else if (car.list.size() == 2) // that's lambda
             {
                 const Cell& args = car.list[0];
-                Env local_env(&env);
+                shared_ptr<Env> local_env;
+                if (!car.bound_env) local_env.reset(new Env(env));
+                else
+                {
+                    local_env = car.bound_env;
+                    local_env->outer = env;
+                }
                 // evaluate arguments,
                 // create new Env with evaluated arguments assigned to formal arguments
                 // TODO: check if number of actual and formal arguments is the same
                 for (int i = 0; i < args.list.size(); ++i)
-                    local_env.set(args.list[i].name, list[i + 1].eval(env));
+                    local_env->set(args.list[i].name, list[i + 1].eval(env));
                 // and call eval for a list stored in Env for Func
                 return car.list[1].eval(local_env);
             }
         }
         else if (car.type == Int) return car;
-        else if (car.type == Symbol) return env.lookup(car.name);
+        else if (car.type == Symbol) return env->lookup(car.name);
         else if (type == Nil) return Nil;
         else if (car.type == List)
         {
@@ -319,7 +356,7 @@ Cell parse_list(const char* input, const char** jumped_to = NULL)
 
 int main()
 {
-    Env env = Env::global();
+    shared_ptr<Env> env = Env::global();
     // lambdas
     parse_list("(define square (lambda (x) (* x x)))").eval(env);
     parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
@@ -357,6 +394,18 @@ int main()
     parse_list("(accumulate + 0 (map square (filter odd? l)))").eval(env).pretty_print();
     parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
     parse_list("(remove 3 l)").eval(env).pretty_print();
-
+ 
+    //parse_list("(define balance 100)").eval(env);
+    //parse_list("(define withdraw (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance))\
+                                                        (1) Nil)))").eval(env);
+    //parse_list("(withdraw 10)").eval(env).pretty_print();
+    //parse_list("(withdraw 10)").eval(env).pretty_print();
+    //parse_list("(withdraw 10)").eval(env).pretty_print();
+    //parse_list("(withdraw 10)").eval(env).pretty_print();
+ 
+    parse_list("(define new-withdraw (let ((balance 100)) (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance)) (1) Nil))))").eval(env);
+    parse_list("(new-withdraw 10)").eval(env).pretty_print();
+    parse_list("(new-withdraw 10)").eval(env).pretty_print();
+ 
     return 0;
 }
