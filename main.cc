@@ -395,13 +395,13 @@ int main()
     parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
     parse_list("(remove 3 l)").eval(env).pretty_print();
  
-    //parse_list("(define balance 100)").eval(env);
-    //parse_list("(define withdraw (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance))\
+    parse_list("(define balance 100)").eval(env);
+    parse_list("(define withdraw (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance))\
                                                         (1) Nil)))").eval(env);
-    //parse_list("(withdraw 10)").eval(env).pretty_print();
-    //parse_list("(withdraw 10)").eval(env).pretty_print();
-    //parse_list("(withdraw 10)").eval(env).pretty_print();
-    //parse_list("(withdraw 10)").eval(env).pretty_print();
+    parse_list("(withdraw 10)").eval(env).pretty_print();
+    parse_list("(withdraw 10)").eval(env).pretty_print();
+    parse_list("(withdraw 10)").eval(env).pretty_print();
+    parse_list("(withdraw 10)").eval(env).pretty_print();
  
     parse_list("(define new-withdraw (let ((balance 100)) (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance)) (1) Nil))))").eval(env);
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
