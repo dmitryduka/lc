@@ -378,7 +378,6 @@ int main()
     parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
     parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
     parse_list("(apply-func square 5)").eval(env).pretty_print();
-    // TODO: play with define inside lambda
     // fibonacci recursive
     parse_list("(define fibonacci (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fibonacci (- x 1)) (fibonacci (- x 2))))))").eval(env);
     parse_list("(fibonacci 12)").eval(env).pretty_print();
