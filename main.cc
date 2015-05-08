@@ -113,6 +113,7 @@ Cell cond_func(const Cell& cell, shared_ptr<Env> env)
 Cell lambda_func(const Cell& cell, shared_ptr<Env> env)
 {
     Cell result(Cell::Func);
+    result.list.reserve(2);
     result.list.push_back(cell.list[1]); // push formal argument names (that'll be a list of symbols)
     result.list.push_back(cell.list[2]); // push lambda body
     return result;
@@ -133,6 +134,7 @@ Cell cdr_func(const Cell& cell, shared_ptr<Env> env)
     if (source.type == Cell::List && source.list.size() > 1)
     {
         Cell result(Cell::List);
+        result.list.reserve(source.list.size() - 1);
         for (int i = 1; i < source.list.size(); ++i)
             result.list.push_back(source.list[i]);
         return result;
@@ -143,6 +145,7 @@ Cell cdr_func(const Cell& cell, shared_ptr<Env> env)
 Cell list_func(const Cell& cell, shared_ptr<Env> env)
 {
     Cell result(Cell::List);
+    result.list.reserve(cell.list.size() - 1);
     for (int i = 1; i < cell.list.size(); ++i)
         result.list.push_back(cell.list[i].eval(env));
     return result;
@@ -173,6 +176,7 @@ Cell begin_func(const Cell& cell, shared_ptr<Env> env)
 
 Cell set_func(const Cell& cell, shared_ptr<Env> env);
 Cell define_func(const Cell& cell, shared_ptr<Env> env);
+Cell undef_func(const Cell& cell, shared_ptr<Env> env);
 
 struct Env
 {
@@ -189,9 +193,11 @@ struct Env
         else return Nil;         // unbound variable, should cause error here
     }
 
-    void set(const std::string& name, const Cell& cell) 
+    void set(const std::string& name, const Cell& cell)  { data[name] = cell; }
+    void unset(const std::string& name) 
     {
-        data[name] = cell;
+        if (data.count(name)) data.erase(name);
+        else outer->unset(name); 
     }
 
     static shared_ptr<Env> global()
@@ -218,6 +224,7 @@ struct Env
         env->data["append"] = Cell(&append_func);
         env->data["let"] = Cell(&let_func);
         env->data["begin"] = Cell(&begin_func);
+        env->data["undef"] = Cell(&undef_func);
         return env;
     }
 };
@@ -239,6 +246,14 @@ Cell define_func(const Cell& cell, shared_ptr<Env> env)
     if (cell.list.size() < 3) return Nil;
     env->set(cell.list[1].name, cell.list[2].eval(env));
     return Cell(cell.list[1].name);
+}
+
+Cell undef_func(const Cell& cell, shared_ptr<Env> env)
+{
+    // TODO: check that argument is really a symbol
+    if (cell.list.size() == 2)
+        env->unset(cell.list[1].name);
+    return Nil;
 }
 
 Cell let_func(const Cell& cell, shared_ptr<Env> env)
@@ -406,6 +421,8 @@ int main()
     parse_list("(define new-withdraw (let ((balance 100)) (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance)) (1) Nil))))").eval(env);
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
+ 
+    parse_list("(undef new-withdraw)").eval(env);
  
     return 0;
 }
