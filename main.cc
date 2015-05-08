@@ -108,15 +108,7 @@ Cell cond_func(const Cell& cell, shared_ptr<Env> env)
             if (cell.list.size() != i)
                 return cell.list[i + 1].eval(env);
     }
-}
-
-Cell lambda_func(const Cell& cell, shared_ptr<Env> env)
-{
-    Cell result(Cell::Func);
-    result.list.reserve(2);
-    result.list.push_back(cell.list[1]); // push formal argument names (that'll be a list of symbols)
-    result.list.push_back(cell.list[2]); // push lambda body
-    return result;
+    return Nil;
 }
 
 Cell car_func(const Cell& cell, shared_ptr<Env> env)
@@ -164,7 +156,6 @@ Cell append_func(const Cell& cell, shared_ptr<Env> env)
     return result;
 }
 
-Cell let_func(const Cell& cell, shared_ptr<Env> env);
 
 Cell begin_func(const Cell& cell, shared_ptr<Env> env)
 {
@@ -180,26 +171,36 @@ Cell quote_func(const Cell& cell, shared_ptr<Env> env)
     return cell.list[1];
 }
 
+Cell eval_func(const Cell& cell, shared_ptr<Env> env)
+{
+    // TODO: add checks
+    return cell.list[1].type == Cell::Symbol ? cell.list[1].eval(env).eval(env) :
+           cell.list[1].type == Cell::List ? cell.list[1].eval(env) : Nil;
+}
+
 Cell set_func(const Cell& cell, shared_ptr<Env> env);
 Cell define_func(const Cell& cell, shared_ptr<Env> env);
 Cell undef_func(const Cell& cell, shared_ptr<Env> env);
+Cell lambda_func(const Cell& cell, shared_ptr<Env> env);
+Cell let_func(const Cell& cell, shared_ptr<Env> env);
 
 struct Env
 {
     std::unordered_map<std::string, Cell> data;
     shared_ptr<Env> outer;
 
-    Env() : outer(NULL) {}
+    Env() {}
     Env(shared_ptr<Env> outer_env) : outer(outer_env) {}
 
     Cell& lookup(const std::string& name)
     {
         if (data.count(name)) return data[name];
         else if (outer) return outer->lookup(name);
-        else return Nil;         // unbound variable, should cause error here
+        else return Nil;  // unbound variable, should cause error here
     }
 
-    void set(const std::string& name, const Cell& cell)  { data[name] = cell; }
+    void set(const std::string& name, const Cell& cell) { data[name] = cell; }
+
     void unset(const std::string& name) 
     {
         if (data.count(name)) data.erase(name);
@@ -232,9 +233,19 @@ struct Env
         env->data["begin"] = Cell(&begin_func);
         env->data["undef"] = Cell(&undef_func);
         env->data["quote"] = Cell(&quote_func);
+        env->data["eval"] = Cell(&eval_func);
         return env;
     }
 };
+
+Cell lambda_func(const Cell& cell, shared_ptr<Env> env)
+{
+    Cell result(Cell::Func);
+    result.list.reserve(2);
+    result.list.push_back(cell.list[1]); // push formal argument names (that'll be a list of symbols)
+    result.list.push_back(cell.list[2]); // push lambda body
+    return result;
+}
 
 Cell set_func(const Cell& cell, shared_ptr<Env> env)
 {
@@ -308,20 +319,16 @@ Cell Cell::eval(shared_ptr<Env> env) const
             else if (car.list.size() == 2) // that's lambda
             {
                 const Cell& args = car.list[0];
-                shared_ptr<Env> local_env;
-                if (!car.bound_env) local_env.reset(new Env(env));
-                else
-                {
-                    local_env = car.bound_env;
-                    local_env->outer = env;
-                }
+                shared_ptr<Env> local_env(new Env(car.bound_env ? car.bound_env : env));
                 // evaluate arguments,
                 // create new Env with evaluated arguments assigned to formal arguments
                 // TODO: check if number of actual and formal arguments is the same
                 for (int i = 0; i < args.list.size(); ++i)
-                    local_env->set(args.list[i].name, list[i + 1].eval(env));
+                    local_env->set(args.list[i].name, list[i + 1].eval(local_env));
                 // and call eval for a list stored in Env for Func
-                return car.list[1].eval(local_env);
+                Cell result = car.list[1].eval(local_env);
+                if (!result.bound_env) result.bound_env = local_env;
+                return result;
             }
         }
         else if (car.type == Int) return car;
@@ -417,6 +424,7 @@ int main()
     parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
     parse_list("(remove 3 l)").eval(env).pretty_print();
  
+    // changing symbols from outer env
     parse_list("(define balance 100)").eval(env);
     parse_list("(define withdraw (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance))\
                                                         (1) Nil)))").eval(env);
@@ -424,15 +432,21 @@ int main()
     parse_list("(withdraw 10)").eval(env).pretty_print();
     parse_list("(withdraw 10)").eval(env).pretty_print();
     parse_list("(withdraw 10)").eval(env).pretty_print();
- 
+    // closure 
     parse_list("(define new-withdraw (let ((balance 100)) (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance)) (1) Nil))))").eval(env);
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
- 
-    //parse_list("(undef new-withdraw)").eval(env);
-    // loops
-    parse_list("(define ntimes (lambda (n l) (cond (eq n 0) l (1) (begin l (ntimes (- n 1) l)))))").eval(env); 
+    // loop
+    parse_list("(define ntimes (lambda (n l) (cond (eq n 0) (eval l) (1) (begin (eval l) (ntimes (- n 1) l)))))").eval(env); 
     parse_list("(ntimes 10 (quote (new-withdraw 1)))").eval(env).pretty_print(); 
-    parse_list("(new-withdraw 1)").eval(env).pretty_print(); 
-    return 0;
+    parse_list("(undef new-withdraw)").eval(env);
+    // cons, car, cdr using closure
+    parse_list("(define cons* (lambda (left right) (lambda (m) (cond (eq m 0) left (1) right))))").eval(env);
+    parse_list("(define car* (lambda (x) (x 0)))").eval(env);
+    parse_list("(define cdr* (lambda (x) (x 1)))").eval(env);
+    parse_list("(define cell (cons* 1 (cons* 2 (cons* 3 (cons* 4 (cons* 5 Nil))))))").eval(env); 
+    parse_list("(car* cell)").eval(env).pretty_print(); 
+    parse_list("(car* (cdr* (cdr* (cdr* (cdr* cell)))))").eval(env).pretty_print(); 
+    
+   return 0;
 }
