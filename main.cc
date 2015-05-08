@@ -390,8 +390,9 @@ int main()
     parse_list("(car (cdr l))").eval(env).pretty_print();
     parse_list("(cdr (cdr (cdr l)))").eval(env).pretty_print();
     // list functions
+    parse_list("(define reverse (lambda (l) (cond (null? l) Nil (1) (append (reverse (cdr l)) (list (car l))))))").eval(env);
     parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (list (f (car l))) (map f (cdr l))))))").eval(env);
-    parse_list("(map square l)").eval(env).pretty_print();
+    parse_list("(reverse (map square l))").eval(env).pretty_print();
     parse_list("(define filter (lambda (pred l) \
                                         (cond (null? l) Nil \
                                               (1) (append (cond (pred (car l)) (list (car l)) \
