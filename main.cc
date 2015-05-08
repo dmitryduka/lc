@@ -174,6 +174,12 @@ Cell begin_func(const Cell& cell, shared_ptr<Env> env)
     return cell.list[cell.list.size() - 1].eval(env);
 }
 
+Cell quote_func(const Cell& cell, shared_ptr<Env> env)
+{
+    // TODO: add checks
+    return cell.list[1];
+}
+
 Cell set_func(const Cell& cell, shared_ptr<Env> env);
 Cell define_func(const Cell& cell, shared_ptr<Env> env);
 Cell undef_func(const Cell& cell, shared_ptr<Env> env);
@@ -225,6 +231,7 @@ struct Env
         env->data["let"] = Cell(&let_func);
         env->data["begin"] = Cell(&begin_func);
         env->data["undef"] = Cell(&undef_func);
+        env->data["quote"] = Cell(&quote_func);
         return env;
     }
 };
@@ -422,7 +429,10 @@ int main()
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
  
-    parse_list("(undef new-withdraw)").eval(env);
- 
+    //parse_list("(undef new-withdraw)").eval(env);
+    // loops
+    parse_list("(define ntimes (lambda (n l) (cond (eq n 0) l (1) (begin l (ntimes (- n 1) l)))))").eval(env); 
+    parse_list("(ntimes 10 (quote (new-withdraw 1)))").eval(env).pretty_print(); 
+    parse_list("(new-withdraw 1)").eval(env).pretty_print(); 
     return 0;
 }
