@@ -1,5 +1,7 @@
 #include <iostream>
+#include <fstream>
 #include <vector>
+#include <set>
 #include <memory>
 #include <unordered_map>
 
@@ -8,6 +10,8 @@ struct Env;
 using std::cout;
 using std::endl;
 using std::shared_ptr;
+
+std::set<Env*> envs;
 
 struct Cell
 {
@@ -69,9 +73,7 @@ struct MinusOp { int operator()(int x, int y) { return x - y; } };
 struct MulOp { int operator()(int x, int y) { return x * y; } };
 struct DivOp { int operator()(int x, int y) { return x / y; } };
 struct EqOp { int operator()(int x, int y) { return x == y ? 1 : 0; } };
-struct NotEqOp { int operator()(int x, int y) { return x != y ? 1 : 0; } };
 struct LessOp { int operator()(int x, int y) { return x < y ? 1 : 0; } };
-struct MoreOp { int operator()(int x, int y) { return x > y ? 1 : 0; } };
 
 template<typename Op>
 Cell binary_func(const Cell& cell, shared_ptr<Env> env)
@@ -81,7 +83,8 @@ Cell binary_func(const Cell& cell, shared_ptr<Env> env)
     Cell result(cell.list[1].eval(env).as_int);
     for (int i = 2; i < cell.list.size(); ++i)
     {
-        result.as_int = Op()(result.as_int, cell.list[i].eval(env).as_int);
+        Cell c = cell.list[i].eval(env);
+        result.as_int = Op()(result.as_int, c.as_int);
     }
     return result;
 }
@@ -96,6 +99,18 @@ Cell null_func(const Cell& cell, shared_ptr<Env> env)
         return Cell(0);          // return false otherwise
     }
     return Nil;
+}
+
+Cell func_func(const Cell& cell, shared_ptr<Env> env)
+{
+    return cell.list[1].eval(env).type == Cell::Func ? Cell(1) : Cell(0);
+}
+
+Cell list_func(const Cell& cell, shared_ptr<Env> env)
+{
+    Cell::CellType type = cell.list[1].eval(env).type;
+    if (type == Cell::List) return Cell(1);
+    return Cell(0);
 }
 
 Cell cond_func(const Cell& cell, shared_ptr<Env> env)
@@ -134,29 +149,6 @@ Cell cdr_func(const Cell& cell, shared_ptr<Env> env)
     return Nil;
 }
 
-Cell list_func(const Cell& cell, shared_ptr<Env> env)
-{
-    Cell result(Cell::List);
-    result.list.reserve(cell.list.size() - 1);
-    for (int i = 1; i < cell.list.size(); ++i)
-        result.list.push_back(cell.list[i].eval(env));
-    return result;
-}
-
-Cell append_func(const Cell& cell, shared_ptr<Env> env)
-{
-    Cell result(Cell::List);
-    for (int i = 1; i < cell.list.size(); ++i)
-    {
-        const Cell& e = cell.list[i].eval(env);
-        if (e.type == Cell::List)
-            for (int j = 0; j < e.list.size(); ++j)
-                result.list.push_back(e.list[j]);
-    }
-    return result;
-}
-
-
 Cell begin_func(const Cell& cell, shared_ptr<Env> env)
 {
     // TODO: add checks
@@ -189,8 +181,9 @@ struct Env
     std::unordered_map<std::string, Cell> data;
     shared_ptr<Env> outer;
 
-    Env() {}
-    Env(shared_ptr<Env> outer_env) : outer(outer_env) {}
+    Env() { envs.insert(this); }
+    ~Env() { envs.erase(this); }
+    Env(shared_ptr<Env> outer_env) : outer(outer_env) { envs.insert(this); }
 
     Cell& lookup(const std::string& name)
     {
@@ -218,17 +211,15 @@ struct Env
         env->data["/"] = Cell(&binary_func<DivOp>);
         env->data["eq"] = Cell(&binary_func<EqOp>);
         env->data["less"] = Cell(&binary_func<LessOp>);
-        env->data["neq"] = Cell(&binary_func<NotEqOp>);
-        env->data["more"] = Cell(&binary_func<MoreOp>);
         env->data["null?"] = Cell(&null_func);
+        env->data["func?"] = Cell(&func_func);
+        env->data["list?"] = Cell(&list_func);
         env->data["define"] = Cell(&define_func);
         env->data["cond"] = Cell(&cond_func);
         env->data["set"] = Cell(&set_func);
         env->data["lambda"] = Cell(&lambda_func);
-        env->data["list"] = Cell(&list_func);
-        env->data["car"] = Cell(&car_func);
-        env->data["cdr"] = Cell(&cdr_func);
-        env->data["append"] = Cell(&append_func);
+        env->data["car*"] = Cell(&car_func);
+        env->data["cdr*"] = Cell(&cdr_func);
         env->data["let"] = Cell(&let_func);
         env->data["begin"] = Cell(&begin_func);
         env->data["undef"] = Cell(&undef_func);
@@ -249,7 +240,6 @@ Cell lambda_func(const Cell& cell, shared_ptr<Env> env)
 
 Cell set_func(const Cell& cell, shared_ptr<Env> env)
 {
-    // TODO: doesn't handle quotes
     if ((cell.list.size() == 3) &&
         (env->lookup(cell.list[1].name) != Nil))
     {
@@ -292,7 +282,7 @@ void Cell::pretty_print(size_t tabs_no) const
     const std::string tabs(tabs_no, ' ');
     cout << tabs << type_to_string(type) << ": ";
     if (type == Int) cout << as_int << endl;
-    else if (type == Symbol || type == Func) cout << name << endl;
+    else if (type == Symbol) cout << name << endl;
     else if (type == List)
     {
         cout << endl;
@@ -307,6 +297,7 @@ void Cell::pretty_print(size_t tabs_no) const
 Cell Cell::eval(shared_ptr<Env> env) const
 {
     if (type == Int) return *this;
+    else if (type == Func) return *this;
     else if (type == Nil) return Nil;
     else if (type == Symbol) return env->lookup(name);
     else if (type == List)
@@ -320,14 +311,16 @@ Cell Cell::eval(shared_ptr<Env> env) const
             {
                 const Cell& args = car.list[0];
                 shared_ptr<Env> local_env(new Env(car.bound_env ? car.bound_env : env));
+//                if (local_env->outer == car.bound_env) local_env->outer = env;
                 // evaluate arguments,
                 // create new Env with evaluated arguments assigned to formal arguments
-                // TODO: check if number of actual and formal arguments is the same
-                for (int i = 0; i < args.list.size(); ++i)
-                    local_env->set(args.list[i].name, list[i + 1].eval(local_env));
+                if (args.list.size() == list.size() - 1)
+                    for (int i = 0; i < args.list.size(); ++i)
+                        local_env->set(args.list[i].name, list[i + 1].eval(env));
+                else return Nil; // TODO: in case number of actual and formal arguments differ signal error somehow
                 // and call eval for a list stored in Env for Func
                 Cell result = car.list[1].eval(local_env);
-                if (!result.bound_env) result.bound_env = local_env;
+                if (result.type == Func && !result.bound_env)  result.bound_env = local_env;
                 return result;
             }
         }
@@ -383,7 +376,44 @@ Cell parse_list(const char* input, const char** jumped_to = NULL)
 }
 
 
+void cleanup()
+{
+    std::set<Env*> tonull;
+    for (auto& it : envs)
+        for (auto& envit : it->data)
+           if (envit.second.bound_env)
+                tonull.insert(&*(envit.second.bound_env));
+    for (auto& it : tonull)
+        it->outer = NULL;
+}
+
+void dump_graph()
+{
+    std::ofstream ofs("graph.txt");
+    ofs << "digraph test {" << endl;
+    for (auto& it : envs)
+    {
+        ofs << "edge [style=solid,color=black];" << endl;
+        ofs << "p" << &*it;
+        if (it->outer) ofs << " -> p" << &*(it->outer) << ";";
+        ofs << endl;
+        for (auto& envit : it->data)
+        {
+           //cout << envit.first << endl;
+           if (envit.second.bound_env)
+           {
+                ofs << "edge [style=dashed,color=red];" << endl;
+                ofs << "p" << &*it << " -> p"  << &*it << "_" << envit.first << ";" << endl;                
+                ofs << "edge [style=solid,color=black];" << endl;
+                ofs <<  "p" << &*it << "_" << envit.first << " -> p" << &*envit.second.bound_env << ";" << endl;                 
+           }
+        }
+    }
+    ofs << "}" << endl;
+}
+
 int main()
+{
 {
     shared_ptr<Env> env = Env::global();
     // lambdas
@@ -395,44 +425,13 @@ int main()
     // fibonacci recursive
     parse_list("(define fibonacci (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fibonacci (- x 1)) (fibonacci (- x 2))))))").eval(env);
     parse_list("(fibonacci 12)").eval(env).pretty_print();
-    // lists
-    parse_list("(car (list 4 5 6))").eval(env).pretty_print();
-    parse_list("(define l (list 1 2 3 4 5))").eval(env);
-    parse_list("(car l)").eval(env).pretty_print();
-    parse_list("(cdr l)").eval(env).pretty_print();
-    parse_list("(car (cdr l))").eval(env).pretty_print();
-    parse_list("(cdr (cdr (cdr l)))").eval(env).pretty_print();
-    // list functions
-    parse_list("(define reverse (lambda (l) (cond (null? l) Nil (1) (append (reverse (cdr l)) (list (car l))))))").eval(env);
-    parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (list (f (car l))) (map f (cdr l))))))").eval(env);
-    parse_list("(reverse (map square l))").eval(env).pretty_print();
-    parse_list("(define filter (lambda (pred l) \
-                                        (cond (null? l) Nil \
-                                              (1) (append (cond (pred (car l)) (list (car l)) \
-                                                                (1) Nil) \
-                                                          (filter pred (cdr l))))))").eval(env);
+    // predicates
     parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").eval(env);
     parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").eval(env);
     parse_list("(define even? (lambda (x) (not (odd? x))))").eval(env);
-    parse_list("(map square (filter odd? l))").eval(env).pretty_print();
-    parse_list("(map square (filter even? l))").eval(env).pretty_print();
-    parse_list("(define accumulate (lambda (op start l) \
-                                            (cond (null? l) start \
-                                                    (1) (op (car l) (accumulate op start (cdr l))))))").eval(env);
-    parse_list("(accumulate + 0 l)").eval(env).pretty_print();
-    parse_list("(accumulate + 0 (map square (filter odd? l)))").eval(env).pretty_print();
-    parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
-    parse_list("(remove 3 l)").eval(env).pretty_print();
- 
-    // changing symbols from outer env
-    parse_list("(define balance 100)").eval(env);
-    parse_list("(define withdraw (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance))\
-                                                        (1) Nil)))").eval(env);
-    parse_list("(withdraw 10)").eval(env).pretty_print();
-    parse_list("(withdraw 10)").eval(env).pretty_print();
-    parse_list("(withdraw 10)").eval(env).pretty_print();
-    parse_list("(withdraw 10)").eval(env).pretty_print();
-    // closure 
+    parse_list("(define neq (lambda (x y) (not (eq x y))))").eval(env);
+    parse_list("(define more (lambda (x y) (cond (not (less x y)) (cond (neq x y) 1 (1) 0) (1) 0)))").eval(env);
+     // closure 
     parse_list("(define new-withdraw (let ((balance 100)) (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance)) (1) Nil))))").eval(env);
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
     parse_list("(new-withdraw 10)").eval(env).pretty_print();
@@ -441,12 +440,40 @@ int main()
     parse_list("(ntimes 10 (quote (new-withdraw 1)))").eval(env).pretty_print(); 
     parse_list("(undef new-withdraw)").eval(env);
     // cons, car, cdr using closure
-    parse_list("(define cons* (lambda (left right) (lambda (m) (cond (eq m 0) left (1) right))))").eval(env);
-    parse_list("(define car* (lambda (x) (x 0)))").eval(env);
-    parse_list("(define cdr* (lambda (x) (x 1)))").eval(env);
-    parse_list("(define cell (cons* 1 (cons* 2 (cons* 3 (cons* 4 (cons* 5 Nil))))))").eval(env); 
-    parse_list("(car* cell)").eval(env).pretty_print(); 
-    parse_list("(car* (cdr* (cdr* (cdr* (cdr* cell)))))").eval(env).pretty_print(); 
+    parse_list("(define cons (lambda (left right) (lambda (m) (cond (eq m 0) left (1) right))))").eval(env);
+    parse_list("(define car (lambda (x) (cond (list? x) (car* x) (1) (cond (func? x) (x 0) (1) x))))").eval(env);
+    parse_list("(define cdr (lambda (x) (cond (list? x) (cdr* x) (1) (cond (func? x) (x 1) (1) Nil))))").eval(env);
+    parse_list("(define list (lambda (x) (cond (null? x) Nil (1) (cons (car x) (list (cdr x))))))").eval(env); 
+    parse_list("(define accumulate (lambda (op start l) \
+                                            (cond (null? l) start \
+                                                    (1) (op (car l) (accumulate op start (cdr l))))))").eval(env);
+    parse_list("(define append (lambda (x y) (cond (null? x) y \
+                                                    (1) (cons (car x) (cond (null? (cdr x)) y\
+                                                                             (1) (append (cdr x) y))))))").eval(env); 
+    parse_list("(define reverse (lambda (l) (cond (null? (cdr l)) l (1) (append (reverse (cdr l)) (car l)))))").eval(env);
+    parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (car l)) (map f (cdr l))))))").eval(env);
+    parse_list("(define filter (lambda (pred l) \
+                                        (cond (null? l) Nil \
+                                              (1) (append (cond (pred (car l)) (car l) \
+                                                                (1) Nil) \
+                                                          (filter pred (cdr l))))))").eval(env);
+    parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
+    parse_list("(define nth (lambda (x l) (cond (eq x 0) (car l) (1) (nth (- x 1) (cdr l)))))").eval(env);
+ 
+    parse_list("(define l1 (list (quote (1 2 3 4 5))))").eval(env); 
+    parse_list("(define l2 (list (quote (6 7 8 9 10))))").eval(env); 
+    parse_list("(define l1l2 (append l1 l2))").eval(env); 
+    parse_list("(define l1l2rev (reverse (map square (filter even? (remove 2 l1l2)))))").eval(env);
     
-   return 0;
+    parse_list("(nth 0 l1l2rev)").eval(env).pretty_print();
+    parse_list("(nth 1 l1l2rev)").eval(env).pretty_print();
+    parse_list("(nth 2 l1l2rev)").eval(env).pretty_print();
+    parse_list("(nth 3 l1l2rev)").eval(env).pretty_print();
+    parse_list("(accumulate + 0 l1l2rev)").eval(env).pretty_print();
 }
+    dump_graph();
+    cleanup();
+//    dump_graph();   
+    return 0;
+}
+
