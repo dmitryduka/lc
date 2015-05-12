@@ -170,6 +170,21 @@ Cell eval_func(const Cell& cell, shared_ptr<Env> env)
            cell.list[1].type == Cell::List ? cell.list[1].eval(env) : Nil;
 }
 
+Cell print_func(const Cell& cell, shared_ptr<Env> env)
+{
+    if (cell.list.size() == 1) cout << endl;
+    else {
+        const Cell& result = cell.list[1].eval(env);
+        if (result.type == Cell::Nil) cout << "Nil";
+        else if (result.type == Cell::Int) cout << result.as_int;
+        else if (result.type == Cell::Func) cout << "Func";
+        else if (result.type == Cell::List) cout << "List";
+        else if (result.type == Cell::Symbol) cout << cell.name;
+        cout << " ";
+    }
+    return Nil;
+}
+
 Cell set_func(const Cell& cell, shared_ptr<Env> env);
 Cell define_func(const Cell& cell, shared_ptr<Env> env);
 Cell undef_func(const Cell& cell, shared_ptr<Env> env);
@@ -225,6 +240,7 @@ struct Env
         env->data["undef"] = Cell(&undef_func);
         env->data["quote"] = Cell(&quote_func);
         env->data["eval"] = Cell(&eval_func);
+        env->data["print*"] = Cell(&print_func);
         return env;
     }
 };
@@ -448,7 +464,7 @@ int main()
                                             (cond (null? l) start \
                                                     (1) (op (car l) (accumulate op start (cdr l))))))").eval(env);
     parse_list("(define append (lambda (x y) (cond (null? x) y \
-                                                    (1) (cons (car x) (cond (null? (cdr x)) y\
+                                                    (1) (cons (cond (func? x) (car x) (1) x) (cond (null? (cdr x)) y\
                                                                              (1) (append (cdr x) y))))))").eval(env); 
     parse_list("(define reverse (lambda (l) (cond (null? (cdr l)) l (1) (append (reverse (cdr l)) (car l)))))").eval(env);
     parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (car l)) (map f (cdr l))))))").eval(env);
@@ -459,19 +475,40 @@ int main()
                                                           (filter pred (cdr l))))))").eval(env);
     parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
     parse_list("(define nth (lambda (x l) (cond (eq x 0) (car l) (1) (nth (- x 1) (cdr l)))))").eval(env);
- 
+    parse_list("(define qsort (lambda (l) (begin (define first (car l)) \
+                                                 (define rest (cdr l)) \
+                                                 (define lesseqthan (lambda (x) (lambda (y) (cond (eq x y) 1 \
+                                                                                                 (less y x) 1 \
+                                                                                                 (1) 0)))) \
+                                                 (define morethan (lambda (x) (lambda (y) (cond (not (eq x y)) \
+                                                                                                (cond (not (less y x)) 1 \
+                                                                                                      (1) 0) \
+                                                                                                (1) 0)))) \
+                                                 (cond (null? l) Nil \
+                                                       (null? first) Nil \
+                                                       (null? rest) first \
+                                                       (1) (append (qsort (filter (lesseqthan first) rest)) \
+                                                                   (append first (qsort (filter (morethan first) rest))))))))").eval(env);
+
+    parse_list("(define print (lambda (l) (cond (null? l) (print*) \
+                                                (1) (begin (print* (car l)) \
+                                                           (print (cdr l))))))").eval(env); 
     parse_list("(define l1 (list (quote (1 2 3 4 5))))").eval(env); 
     parse_list("(define l2 (list (quote (6 7 8 9 10))))").eval(env); 
     parse_list("(define l1l2 (append l1 l2))").eval(env); 
     parse_list("(define l1l2rev (reverse (map square (filter even? (remove 2 l1l2)))))").eval(env);
+    parse_list("(print l1l2)").eval(env); 
+    parse_list("(print l1l2rev)").eval(env); 
     
-    parse_list("(nth 0 l1l2rev)").eval(env).pretty_print();
-    parse_list("(nth 1 l1l2rev)").eval(env).pretty_print();
-    parse_list("(nth 2 l1l2rev)").eval(env).pretty_print();
-    parse_list("(nth 3 l1l2rev)").eval(env).pretty_print();
     parse_list("(accumulate + 0 l1l2rev)").eval(env).pretty_print();
-}
+
+    parse_list("(define unsorted (list (quote (9 3 2 7 9 4 6 1 5 8 10))))").eval(env); 
+    parse_list("(define sorted (qsort unsorted))").eval(env); 
+    parse_list("(print unsorted)").eval(env); 
+    parse_list("(print sorted)").eval(env); 
+
     dump_graph();
+}
     cleanup();
 //    dump_graph();   
     return 0;
