@@ -4,7 +4,7 @@
 #include <set>
 #include <memory>
 #include <unordered_map>
-
+#include <algorithm>
 struct Env;
 
 using std::cout;
@@ -185,6 +185,11 @@ Cell print_func(const Cell& cell, shared_ptr<Env> env)
     return Nil;
 }
 
+Cell args_func(const Cell& cell, shared_ptr<Env> env)
+{
+    return cell.type == Cell::Func ? cell.list[0] : Nil;
+}
+
 Cell set_func(const Cell& cell, shared_ptr<Env> env);
 Cell define_func(const Cell& cell, shared_ptr<Env> env);
 Cell undef_func(const Cell& cell, shared_ptr<Env> env);
@@ -214,7 +219,10 @@ struct Env
         if (data.count(name)) data.erase(name);
         else outer->unset(name); 
     }
-
+    void clear() 
+    {
+        data.clear();
+    }
     static shared_ptr<Env> global()
     {
         shared_ptr<Env> env(new Env);
@@ -241,6 +249,7 @@ struct Env
         env->data["quote"] = Cell(&quote_func);
         env->data["eval"] = Cell(&eval_func);
         env->data["print*"] = Cell(&print_func);
+        env->data["args*"] = Cell(&args_func);
         return env;
     }
 };
@@ -391,18 +400,6 @@ Cell parse_list(const char* input, const char** jumped_to = NULL)
     }
 }
 
-
-void cleanup()
-{
-    std::set<Env*> tonull;
-    for (auto& it : envs)
-        for (auto& envit : it->data)
-           if (envit.second.bound_env)
-                tonull.insert(&*(envit.second.bound_env));
-    for (auto& it : tonull)
-        it->outer = NULL;
-}
-
 void dump_graph()
 {
     std::ofstream ofs("graph.txt");
@@ -416,12 +413,18 @@ void dump_graph()
         for (auto& envit : it->data)
         {
            //cout << envit.first << endl;
+           std::string name = envit.first;
+           std::replace(name.begin(), name.end(), '*', '_');
+           std::replace(name.begin(), name.end(), '+', '_');
+           std::replace(name.begin(), name.end(), '-', '_');
+           std::replace(name.begin(), name.end(), '/', '_');
+           std::replace(name.begin(), name.end(), '?', '_');
+           ofs << "edge [style=dashed,color=red];" << endl;
+           ofs << "p" << &*it << " -> p"  << &*it << "_" << name << ";" << endl;                
            if (envit.second.bound_env)
            {
-                ofs << "edge [style=dashed,color=red];" << endl;
-                ofs << "p" << &*it << " -> p"  << &*it << "_" << envit.first << ";" << endl;                
                 ofs << "edge [style=solid,color=black];" << endl;
-                ofs <<  "p" << &*it << "_" << envit.first << " -> p" << &*envit.second.bound_env << ";" << endl;                 
+                ofs <<  "p" << &*it << "_" << name << " -> p" << &*envit.second.bound_env << ";" << endl;                 
            }
         }
     }
@@ -489,28 +492,39 @@ int main()
                                                        (null? rest) first \
                                                        (1) (append (qsort (filter (lesseqthan first) rest)) \
                                                                    (append first (qsort (filter (morethan first) rest))))))))").eval(env);
-
-    parse_list("(define print (lambda (l) (cond (null? l) (print*) \
+    parse_list("(define length (lambda (l) (begin (define first (car l)) \
+                                                  (define rest (cdr l)) \
+                                                  (cond (null? l) 0 \
+                                                        (null? first) 0 \
+                                                        (null? rest) 1 \
+                                                        (1) (+ 1 (length rest))))))").eval(env); 
+    parse_list("(define iterative (lambda (f from to) (begin () \
+                                                              )))").eval(env);
+    parse_list("(define newline (lambda () (print*)))").eval(env);
+    parse_list("(define print (lambda (l) (cond (null? l) (newline) \
                                                 (1) (begin (print* (car l)) \
                                                            (print (cdr l))))))").eval(env); 
+//    parse_list("(define curry (lambda (f x) (lambda () (f ))))").eval(env);
+    // currying
+    parse_list("(define func (lambda (a b c d) (+ a b c d)))").eval(env);
+    parse_list("(func 1 2 3 4)").eval(env).pretty_print();
+    // list transformations
     parse_list("(define l1 (list (quote (1 2 3 4 5))))").eval(env); 
     parse_list("(define l2 (list (quote (6 7 8 9 10))))").eval(env); 
     parse_list("(define l1l2 (append l1 l2))").eval(env); 
     parse_list("(define l1l2rev (reverse (map square (filter even? (remove 2 l1l2)))))").eval(env);
     parse_list("(print l1l2)").eval(env); 
     parse_list("(print l1l2rev)").eval(env); 
-    
     parse_list("(accumulate + 0 l1l2rev)").eval(env).pretty_print();
-
+    // sort
     parse_list("(define unsorted (list (quote (9 3 2 7 9 4 6 1 5 8 10))))").eval(env); 
     parse_list("(define sorted (qsort unsorted))").eval(env); 
     parse_list("(print unsorted)").eval(env); 
     parse_list("(print sorted)").eval(env); 
-
-    dump_graph();
+    // initiate cleanup
+    env->clear();
 }
-    cleanup();
-//    dump_graph();   
+    dump_graph();
     return 0;
 }
 
