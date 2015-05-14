@@ -15,7 +15,7 @@ std::set<Env*> envs;
 
 struct Cell
 {
-    enum CellType { Symbol, Func, Int, List, Nil, Unknown } type;
+    enum CellType { Symbol, Func, Int, List, Nil, Tag, Unknown } type;
     typedef Cell (*FuncType)(const Cell&, shared_ptr<Env>);
     union
     {
@@ -58,10 +58,11 @@ struct Cell
     static std::string type_to_string(const CellType type)
     {
         if (type == List) return "List";
-        if (type == Symbol) return "Symbol";
-        if (type == Func) return "Func";
-        if (type == Nil) return "Nil";
-        if (type == Int) return "Int";
+        else if (type == Symbol) return "Symbol";
+        else if (type == Func) return "Func";
+        else if (type == Nil) return "Nil";
+        else if (type == Int) return "Int";
+        else if (type == Tag) return "Tag";
         else return "Unknown";
     }
 };
@@ -190,6 +191,48 @@ Cell args_func(const Cell& cell, shared_ptr<Env> env)
     return cell.type == Cell::Func ? cell.list[0] : Nil;
 }
 
+Cell tagbody_func(const Cell& cell, shared_ptr<Env> env)
+{
+    if (cell.list.size() > 1)
+    {
+        bool goto_active = true;
+        while (goto_active)
+        {
+            Cell active_tag(Cell::Tag);
+            for (int i = 0; i < cell.list.size(); ++i)
+            {
+                if (!active_tag.name.empty())
+                    if(!(cell.list[i].type == Cell::Symbol &&
+                        cell.list[i].name == active_tag.name)) continue;
+
+                if (cell.list[i].type == Cell::List)
+                {
+                    goto_active = false;
+                    active_tag = cell.list[i].eval(env);
+                    if (active_tag.type == Cell::Tag) 
+                    {
+                        goto_active = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return Nil;
+}
+
+Cell goto_func(const Cell& cell, shared_ptr<Env> env)
+{
+    if (cell.list.size() == 2 &&
+        cell.list[1].type == Cell::Symbol)
+    {
+        Cell result(Cell::Tag);
+        result.name = cell.list[1].name;
+        return result;
+    }
+    return Nil;
+}
+
 Cell set_func(const Cell& cell, shared_ptr<Env> env);
 Cell define_func(const Cell& cell, shared_ptr<Env> env);
 Cell undef_func(const Cell& cell, shared_ptr<Env> env);
@@ -250,6 +293,8 @@ struct Env
         env->data["eval"] = Cell(&eval_func);
         env->data["print*"] = Cell(&print_func);
         env->data["args*"] = Cell(&args_func);
+        env->data["tagbody"] = Cell(&tagbody_func);
+        env->data["goto"] = Cell(&goto_func);
         return env;
     }
 };
@@ -322,6 +367,7 @@ void Cell::pretty_print(size_t tabs_no) const
 Cell Cell::eval(shared_ptr<Env> env) const
 {
     if (type == Int) return *this;
+    else if (type == Tag) return *this;
     else if (type == Func) return *this;
     else if (type == Nil) return Nil;
     else if (type == Symbol) return env->lookup(name);
@@ -498,8 +544,15 @@ int main()
                                                         (null? first) 0 \
                                                         (null? rest) 1 \
                                                         (1) (+ 1 (length rest))))))").eval(env); 
-    parse_list("(define iterative (lambda (f from to) (begin () \
-                                                              )))").eval(env);
+    parse_list("(define loop (lambda (f *from* *to*) (tagbody start \
+                                                                (f) \
+                                                                (cond  (eq *from* *to*) Nil \
+                                                                       (1) (begin (set *from* (+ *from* 1))\
+                                                                                  (goto start))))))").eval(env);
+    parse_list("(define until (lambda (f pred) (tagbody start \
+                                                        (f) \
+                                                        (cond (pred) Nil \
+                                                              (1) (goto start)))))").eval(env);
     parse_list("(define newline (lambda () (print*)))").eval(env);
     parse_list("(define print (lambda (l) (cond (null? l) (newline) \
                                                 (1) (begin (print* (car l)) \
@@ -520,7 +573,10 @@ int main()
     parse_list("(define unsorted (list (quote (9 3 2 7 9 4 6 1 5 8 10))))").eval(env); 
     parse_list("(define sorted (qsort unsorted))").eval(env); 
     parse_list("(print unsorted)").eval(env); 
-    parse_list("(print sorted)").eval(env); 
+    parse_list("(print sorted)").eval(env);
+    parse_list("(loop (lambda () (print *from*)) 1 10)").eval(env);
+    parse_list("(define k 0)").eval(env); 
+    parse_list("(until (lambda () (begin (print k) (set k (+ k 1)))) (lambda () (eq k 10)))").eval(env);
     // initiate cleanup
     env->clear();
 }
