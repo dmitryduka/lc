@@ -410,16 +410,49 @@ Cell Cell::eval(shared_ptr<Env> env) const
     }
 }
 
+void compile_args(const std::vector<Cell>& list, std::vector<std::string>& program)
+{
+   for (int i = 1; i < list.size(); ++i)
+        list[i].compile(program);
+}
+
 void Cell::compile(std::vector<std::string>& program) const
 {
     if (type == Int) program.push_back("PUSHCI " + std::to_string(as_int));
-    else if (type == Symbol) program.push_back("PUSHS " + name);
+    else if (type == Symbol)
+    {
+        program.push_back("LOADENV");
+        program.push_back("PUSHCAR");
+        program.push_back("PUSHCAR");
+        program.push_back("EQSI " + name);
+        program.push_back("JNZ +6");
+        program.push_back("POP");
+        program.push_back("POP");
+        program.push_back("POP");
+        program.push_back("CDR");
+        program.push_back("JMP -8");
+        program.push_back("POP");
+        program.push_back("POP");
+        program.push_back("CDR");
+        program.push_back("SWAP");
+        program.push_back("POP");
+    }
     else if (type == List)
     {
         if (list.empty()) return;
-        for (int i = 1; i < list.size(); ++i)
-            list[i].compile(program);
-        if (list[0].name == "+") program.push_back("ADD");
+        if (list[0].name == "+") { compile_args(list, program); program.push_back("ADD"); }
+        if (list[0].name == "-") { compile_args(list, program); program.push_back("SUB"); }
+        if (list[0].name == "*") { compile_args(list, program); program.push_back("MUL"); }
+        if (list[0].name == "/") { compile_args(list, program); program.push_back("DIV"); }
+        if (list[0].name == "define")
+        {
+            program.push_back("LOADENV");
+            list[2].compile(program);
+            program.push_back("PUSHS " + list[1].name);
+            program.push_back("CONS");
+            program.push_back("CONS");
+            program.push_back("STOREENV");
+        }
     }
 }
 
@@ -495,7 +528,10 @@ void dump_graph()
 int main()
 {
     std::vector<std::string> program;
-    parse_list("(+ 1 (+ (+ 4 5) (+ 3 5)))").compile(program);
+    parse_list("(define x (* 2 5))").compile(program);
+    parse_list("(define y (+ 8 (- x 3)))").compile(program);
+    parse_list("(define z 50)").compile(program);
+    parse_list("(+ x (* 2 (/ z (- y 5))))").compile(program);
     for (auto x : program)
         cout << x << endl;
     return 0;

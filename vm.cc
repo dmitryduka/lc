@@ -55,8 +55,9 @@ struct VM
     std::vector<Cell> memory;
     Cell env;
     int pc;
+    int ticks;
     
-    VM() : env(Cell::Pair), pc(0) { stack.reserve(5); memory.reserve(5); }
+    VM() : env(Cell::Pair), pc(0), ticks(0) { stack.reserve(1000); memory.reserve(1000); }
 
     int get_env_size() 
     { 
@@ -108,7 +109,31 @@ struct VM
             Cell x = stack.back(); stack.pop_back();
             Cell y = stack.back(); stack.pop_back();
             if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
-            stack.push_back(Cell::make_integer(x.integer + y.integer));
+            stack.push_back(Cell::make_integer(y.integer + x.integer));
+        }
+        else if (op == "SUB")
+        {
+            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
+            Cell x = stack.back(); stack.pop_back();
+            Cell y = stack.back(); stack.pop_back();
+            if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
+            stack.push_back(Cell::make_integer(y.integer - x.integer));
+        }
+        else if (op == "MUL")
+        {
+            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
+            Cell x = stack.back(); stack.pop_back();
+            Cell y = stack.back(); stack.pop_back();
+            if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
+            stack.push_back(Cell::make_integer(y.integer * x.integer));
+        }
+        else if (op == "DIV")
+        {
+            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
+            Cell x = stack.back(); stack.pop_back();
+            Cell y = stack.back(); stack.pop_back();
+            if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
+            stack.push_back(Cell::make_integer(y.integer / x.integer));
         }
         else if (op == "LOADENV")
         {
@@ -202,12 +227,14 @@ struct VM
             stack.push_back(y);
         }
         if (!dont_step_pc) pc += 1;
+        ticks += 1;
     }
     
     void debug()
     {
         cout << "VM info" << endl;
         cout << "  PC: " << pc << endl;
+        cout << "  Ticks: " << ticks << endl;
         cout << "  Stack size: " << stack.size() << endl;
         cout << "  Stack contents: " << endl;
         for (auto x : stack)
@@ -226,52 +253,13 @@ struct VM
 
 int main()
 {
-{
-    // (+ 3 (+ 1 2))
-    VM vm;
+    std::string line;
     std::vector<std::string> program;
-    program.push_back("PUSHCI 3");
-    program.push_back("PUSHCI 1");
-    program.push_back("PUSHCI 2");
-    program.push_back("ADD");
-    program.push_back("ADD");
+    while (std::getline(std::cin, line))
+       program.push_back(line);
+    VM vm;   
     vm.run(program);
     vm.debug();
-}
-{
-    // (define k 10)
-    // (+ 3 (+ k 2))
-    VM vm;
-    std::vector<std::string> program;
-    program.push_back("LOADENV");
-    program.push_back("PUSHCI 10");
-    program.push_back("PUSHS k");
-    program.push_back("CONS");
-    program.push_back("CONS");
-    program.push_back("STOREENV");
-    program.push_back("PUSHCI 3");
-    program.push_back("LOADENV");
-    program.push_back("PUSHCAR");
-    program.push_back("PUSHCAR");
-    program.push_back("EQSI k");
-    program.push_back("JNZ 6");
-    program.push_back("POP");
-    program.push_back("POP");
-    program.push_back("POP");
-    program.push_back("CDR");
-    program.push_back("JMP -8");
-    program.push_back("POP");
-    program.push_back("POP");
-    program.push_back("CDR");
-    program.push_back("SWAP");
-    program.push_back("POP");
-    program.push_back("PUSHCI 2");
-    program.push_back("ADD");
-    program.push_back("ADD");
-    vm.run(program);
-    vm.debug();
-}
-
     return 0;    
 }
 
