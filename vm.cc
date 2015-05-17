@@ -10,8 +10,9 @@ struct Cell
 {
     enum Type : uint8_t { Nil, Pair, Int, String, Lambda } type;
     union {
-        char   string[8];
-        int    integer;
+        char      string[8];
+        int       integer;
+        uint32_t  lambda_addr;
         struct {
             Cell* left;
             Cell* right;
@@ -32,12 +33,13 @@ struct Cell
         if (type == Pair) return "Pair";
         else if (type == Int) return std::to_string(integer);
         else if (type == String) return std::string(string);
-        else if (type == Lambda) return "Lambda";
+        else if (type == Lambda) return std::to_string(lambda_addr);
         return "Unknown";
     }
     std::string pp() { return type_to_string() + ": " + data_to_string(); }
 
     static Cell make_integer(int x) { Cell c(Int); c.integer = x; return c; }
+    static Cell make_lambda(size_t x) { Cell c(Lambda); c.lambda_addr = x; return c; }
     static Cell make_nil() { return Cell(Nil); }
     static Cell make_string(const char* x) { 
         Cell c(String);
@@ -54,10 +56,11 @@ struct VM
     std::vector<Cell> stack;
     std::vector<Cell> memory;
     Cell env;
+    bool stop;
     int pc;
     int ticks;
     
-    VM() : env(Cell::Pair), pc(0), ticks(0) { stack.reserve(1000); memory.reserve(1000); }
+    VM() : env(Cell::Pair), stop(false), pc(0), ticks(0) { stack.reserve(1000); memory.reserve(1000); }
 
     int get_env_size() 
     { 
@@ -83,9 +86,8 @@ struct VM
         pc = 0;
         while (pc < program.size())
         {
-//            cout << "\t\t\t" << program[pc] << endl;
             step(program[pc]);
-//            debug();
+            if (stop) break;
         }
     }
 
@@ -182,7 +184,7 @@ struct VM
             if (stack.back().type != Cell::String) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(tokens[1] == stack.back().string ? 1 : 0));            
         }
-        else if (op == "JNZ")
+        else if (op == "RJNZ")
         {
             if (stack.empty()) return panic(op, "Empty stack");
             if (stack.back().type != Cell::Int) return panic(op, "Type mismatch");
@@ -192,7 +194,7 @@ struct VM
                 dont_step_pc = true;
             }
         }
-        else if (op == "JZ")
+        else if (op == "RJZ")
         {
             if (stack.empty()) return panic(op, "Empty stack");
             if (stack.back().type != Cell::Int) return panic(op, "Type mismatch");
@@ -202,9 +204,45 @@ struct VM
                 dont_step_pc = true;
             }
         }
-        else if (op == "JMP")
+        else if (op == "RJMP")
         {
             pc += std::stoi(tokens[1]);
+            dont_step_pc = true;
+        }
+        else if (op == "JMP")
+        {
+            pc = std::stoi(tokens[1]);
+            dont_step_pc = true;
+        }
+        else if (op == "PUSHPC")
+        {
+            stack.push_back(Cell::make_integer(pc));
+        }
+        else if (op == "PUSHL")
+        {
+            stack.push_back(Cell::make_lambda(std::stoi(tokens[1])));
+        }
+        else if (op == "PUSHFS")
+        {
+            stack.push_back(stack[stack.size() - std::stoi(tokens[1]) - 1]);
+        }
+        else if (op == "FIN")
+        {
+            stop = true;
+        }
+        else if (op == "CALL")
+        {
+            if (stack.empty()) return panic(op, "Empty stack");
+            if (stack.back().type != Cell::Lambda) return panic(op, "Type mismatch");
+            int old_pc = pc;
+            pc = stack.back().lambda_addr; stack.pop_back();
+            stack.push_back(Cell::make_integer(old_pc + 1));
+            dont_step_pc = true;                        
+        }
+        else if (op == "RET")
+        {
+            pc = stack.back().integer;
+            stack.pop_back();
             dont_step_pc = true;
         }
         else if (op == "POP")

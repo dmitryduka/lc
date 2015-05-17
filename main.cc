@@ -2,6 +2,7 @@
 #include <fstream>
 #include <vector>
 #include <set>
+#include <sstream>
 #include <memory>
 #include <unordered_map>
 #include <algorithm>
@@ -55,7 +56,7 @@ struct Cell
 
     void pretty_print(size_t tabs_no = 1) const;
     Cell eval(shared_ptr<Env> env) const;
-    void compile(std::vector<std::string>&) const;
+    void compile(std::vector<std::string>&, std::vector<std::vector<std::string>>&) const;
 
     static std::string type_to_string(const CellType type)
     {
@@ -410,13 +411,16 @@ Cell Cell::eval(shared_ptr<Env> env) const
     }
 }
 
-void compile_args(const std::vector<Cell>& list, std::vector<std::string>& program)
+void compile_args(const std::vector<Cell>& list, 
+                        std::vector<std::string>& program,
+                        std::vector<std::vector<std::string>>& functions)
 {
    for (int i = 1; i < list.size(); ++i)
-        list[i].compile(program);
+        list[i].compile(program, functions);
 }
 
-void Cell::compile(std::vector<std::string>& program) const
+void Cell::compile(std::vector<std::string>& program,
+                   std::vector<std::vector<std::string>>& functions) const
 {
     if (type == Int) program.push_back("PUSHCI " + std::to_string(as_int));
     else if (type == Symbol)
@@ -425,12 +429,12 @@ void Cell::compile(std::vector<std::string>& program) const
         program.push_back("PUSHCAR");
         program.push_back("PUSHCAR");
         program.push_back("EQSI " + name);
-        program.push_back("JNZ +6");
+        program.push_back("RJNZ +6");
         program.push_back("POP");
         program.push_back("POP");
         program.push_back("POP");
         program.push_back("CDR");
-        program.push_back("JMP -8");
+        program.push_back("RJMP -8");
         program.push_back("POP");
         program.push_back("POP");
         program.push_back("CDR");
@@ -440,18 +444,53 @@ void Cell::compile(std::vector<std::string>& program) const
     else if (type == List)
     {
         if (list.empty()) return;
-        if (list[0].name == "+") { compile_args(list, program); program.push_back("ADD"); }
-        if (list[0].name == "-") { compile_args(list, program); program.push_back("SUB"); }
-        if (list[0].name == "*") { compile_args(list, program); program.push_back("MUL"); }
-        if (list[0].name == "/") { compile_args(list, program); program.push_back("DIV"); }
-        if (list[0].name == "define")
+        else if (list[0].name == "+") { compile_args(list, program, functions); program.push_back("ADD"); }
+        else if (list[0].name == "-") { compile_args(list, program, functions); program.push_back("SUB"); }
+        else if (list[0].name == "*") { compile_args(list, program, functions); program.push_back("MUL"); }
+        else if (list[0].name == "/") { compile_args(list, program, functions); program.push_back("DIV"); }
+        else if (list[0].name == "define")
         {
             program.push_back("LOADENV");
-            list[2].compile(program);
+            list[2].compile(program, functions);
             program.push_back("PUSHS " + list[1].name);
             program.push_back("CONS");
             program.push_back("CONS");
             program.push_back("STOREENV");
+        }
+        else if (list[0].name == "lambda")
+        {
+            // bind arguments
+            const size_t args_count = list[1].list.size();
+            std::vector<std::string> func;
+            for (int i = 0; i < args_count; ++i)
+            {
+                func.push_back("LOADENV");
+                func.push_back("PUSHFS " + std::to_string(1 + args_count - i));
+                func.push_back("PUSHS " + list[1].list[i].name);
+                func.push_back("CONS");
+                func.push_back("CONS");
+                func.push_back("STOREENV");
+            }
+            // pop arguments from the stack
+            for (int i = 0; i < args_count; ++i)
+            {
+                func.push_back("SWAP");
+                func.push_back("POP");
+            }
+            // compile body
+            list[2].compile(func, functions);
+            func.push_back("SWAP");
+            func.push_back("RET");
+            functions.push_back(func);
+            program.push_back("PUSHL " + std::to_string(functions.size() - 1));
+        }
+        else // function call
+        {
+            compile_args(list, program, functions); 
+            Cell f(Symbol);
+            f.name = list[0].name;
+            f.compile(program, functions);
+            program.push_back("CALL");
         }
     }
 }
@@ -525,13 +564,52 @@ void dump_graph()
     ofs << "}" << endl;
 }
 
+std::vector<std::string> tokenize(const std::string x)
+{
+    std::vector<std::string> strings;
+    std::istringstream f(x);
+    std::string s;    
+    while (getline(f, s, ' ')) strings.push_back(s);
+    return strings;
+}
+
+void link(std::vector<std::string>& program,
+          std::vector<std::vector<std::string>>& functions)
+{
+    std::vector<size_t> relocs;
+    relocs.reserve(functions.size());
+    size_t program_size = program.size();
+    for (auto& func : functions)
+    {
+        for (auto& line : func)
+            program.push_back(line);
+        relocs.push_back(program_size);
+        program_size += func.size();
+    }
+    for (int i = 0; i < relocs.size(); ++i)
+    {
+        for (auto& line : program)
+        {
+            auto tokens = tokenize(line);
+            if (!tokens.empty())
+                if (tokens[0] == "PUSHL")
+                    if (std::stoi(tokens[1]) == i)
+                        line = std::string("PUSHL ") + std::to_string(relocs[i]);
+        }        
+    }
+}
+
 int main()
 {
     std::vector<std::string> program;
-    parse_list("(define x (* 2 5))").compile(program);
-    parse_list("(define y (+ 8 (- x 3)))").compile(program);
-    parse_list("(define z 50)").compile(program);
-    parse_list("(+ x (* 2 (/ z (- y 5))))").compile(program);
+    std::vector<std::vector<std::string>> functions;
+    parse_list("(define y (+ 8 (- 10 3)))").compile(program, functions);
+    parse_list("(define z 50)").compile(program, functions);
+    parse_list("(define f1 (lambda (x) (+ x 1)))").compile(program, functions);
+    parse_list("(define f2 (lambda (k) (* k 2)))").compile(program, functions);
+    parse_list("(f2 (f1 2))").compile(program, functions);
+    program.push_back("FIN");
+    link(program, functions);
     for (auto x : program)
         cout << x << endl;
     return 0;
