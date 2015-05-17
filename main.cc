@@ -479,7 +479,15 @@ void Cell::compile(std::vector<std::string>& program,
             }
             // compile body
             list[2].compile(func, functions);
+            // SWAP pc and result
             func.push_back("SWAP");
+            // unload local definition from env
+            func.push_back("LOADENV");
+            for (int i = 0; i < args_count; ++i)
+                func.push_back("PUSHCDR");
+            func.push_back("STOREENV");
+            for (int i = 0; i < args_count; ++i)
+                func.push_back("POP");
             func.push_back("RET");
             functions.push_back(func);
             program.push_back("PUSHL " + std::to_string(functions.size() - 1));
@@ -605,9 +613,9 @@ int main()
     std::vector<std::vector<std::string>> functions;
     parse_list("(define y (+ 8 (- 10 3)))").compile(program, functions);
     parse_list("(define z 50)").compile(program, functions);
-    parse_list("(define f1 (lambda (x) (+ x 1)))").compile(program, functions);
-    parse_list("(define f2 (lambda (k) (* k 2)))").compile(program, functions);
-    parse_list("(f2 (f1 2))").compile(program, functions);
+    parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
+    parse_list("(define sofs (lambda (x y) (+ (square x) (square y))))").compile(program, functions);
+    parse_list("(sofs 2 3)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
