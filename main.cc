@@ -5,6 +5,7 @@
 #include <memory>
 #include <unordered_map>
 #include <algorithm>
+
 struct Env;
 
 using std::cout;
@@ -54,6 +55,7 @@ struct Cell
 
     void pretty_print(size_t tabs_no = 1) const;
     Cell eval(shared_ptr<Env> env) const;
+    void compile(std::vector<std::string>&) const;
 
     static std::string type_to_string(const CellType type)
     {
@@ -201,7 +203,7 @@ Cell tagbody_func(const Cell& cell, shared_ptr<Env> env)
             Cell active_tag(Cell::Tag);
             for (int i = 0; i < cell.list.size(); ++i)
             {
-                if (!active_tag.name.empty())
+                if (active_tag.type == Cell::Tag && !active_tag.name.empty())
                     if(!(cell.list[i].type == Cell::Symbol &&
                         cell.list[i].name == active_tag.name)) continue;
 
@@ -408,6 +410,19 @@ Cell Cell::eval(shared_ptr<Env> env) const
     }
 }
 
+void Cell::compile(std::vector<std::string>& program) const
+{
+    if (type == Int) program.push_back("PUSHCI " + std::to_string(as_int));
+    else if (type == Symbol) program.push_back("PUSHS " + name);
+    else if (type == List)
+    {
+        if (list.empty()) return;
+        for (int i = 1; i < list.size(); ++i)
+            list[i].compile(program);
+        if (list[0].name == "+") program.push_back("ADD");
+    }
+}
+
 Cell parse_list(const char* input, const char** jumped_to = NULL)
 {
     if (input)
@@ -479,6 +494,11 @@ void dump_graph()
 
 int main()
 {
+    std::vector<std::string> program;
+    parse_list("(+ 1 (+ (+ 4 5) (+ 3 5)))").compile(program);
+    for (auto x : program)
+        cout << x << endl;
+    return 0;
 {
     shared_ptr<Env> env = Env::global();
     // lambdas
@@ -538,12 +558,6 @@ int main()
                                                        (null? rest) first \
                                                        (1) (append (qsort (filter (lesseqthan first) rest)) \
                                                                    (append first (qsort (filter (morethan first) rest))))))))").eval(env);
-    parse_list("(define length (lambda (l) (begin (define first (car l)) \
-                                                  (define rest (cdr l)) \
-                                                  (cond (null? l) 0 \
-                                                        (null? first) 0 \
-                                                        (null? rest) 1 \
-                                                        (1) (+ 1 (length rest))))))").eval(env); 
     parse_list("(define loop (lambda (f *from* *to*) (tagbody start \
                                                                 (f) \
                                                                 (cond  (eq *from* *to*) Nil \
@@ -553,6 +567,12 @@ int main()
                                                         (f) \
                                                         (cond (pred) Nil \
                                                               (1) (goto start)))))").eval(env);
+    parse_list("(define length (lambda (l) (begin (define i 0) \
+                                                  (cond (null? l) 0 \
+                                                  (1) (begin (until (lambda () (begin (set i (+ i 1)) \
+                                                                                      (set l (cdr l)))) \
+                                                                    (lambda () (null? l))) \
+                                                  i)))))").eval(env); 
     parse_list("(define newline (lambda () (print*)))").eval(env);
     parse_list("(define print (lambda (l) (cond (null? l) (newline) \
                                                 (1) (begin (print* (car l)) \
@@ -575,9 +595,14 @@ int main()
     parse_list("(print unsorted)").eval(env); 
     parse_list("(print sorted)").eval(env);
     parse_list("(loop (lambda () (print *from*)) 1 10)").eval(env);
-    parse_list("(define k 0)").eval(env); 
-    parse_list("(until (lambda () (begin (print k) (set k (+ k 1)))) (lambda () (eq k 10)))").eval(env);
+    parse_list("(length sorted)").eval(env).pretty_print(); 
+    parse_list("(begin (define k 0) (until (lambda () (begin (print k) (set k (+ k 1)))) (lambda () (eq k 10))))").eval(env);
     // initiate cleanup
+    env->clear();
+}
+{
+    shared_ptr<Env> env = Env::global();
+    parse_list("(+ 10 25)").eval(env).pretty_print();
     env->clear();
 }
     dump_graph();
