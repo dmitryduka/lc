@@ -1,7 +1,8 @@
-all: lc vm
-lc:
+all: main vm
+
+main: main.cc
 	g++ -std=c++11 -g main.cc -o main
-vm:
+vm: vm.cc
 	g++ -std=c++11 -g vm.cc -o vm
 
 clean:
