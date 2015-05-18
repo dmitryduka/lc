@@ -438,7 +438,7 @@ void Cell::compile(std::vector<std::string>& program,
         program.push_back("POP");
         program.push_back("POP");
         program.push_back("CDR");
-        program.push_back("SWAP");
+        program.push_back("SWAP 0");
         program.push_back("POP");
     }
     else if (type == List)
@@ -459,13 +459,14 @@ void Cell::compile(std::vector<std::string>& program,
         }
         else if (list[0].name == "lambda")
         {
-            // bind arguments
+            // create new environment and bind arguments
             const size_t args_count = list[1].list.size();
             std::vector<std::string> func;
+            func.push_back("LOADENV"); // save env
             for (int i = 0; i < args_count; ++i)
             {
                 func.push_back("LOADENV");
-                func.push_back("PUSHFS " + std::to_string(1 + args_count - i));
+                func.push_back("PUSHFS " + std::to_string(2 + args_count - i)); // 2 - PC and env
                 func.push_back("PUSHS " + list[1].list[i].name);
                 func.push_back("CONS");
                 func.push_back("CONS");
@@ -474,22 +475,20 @@ void Cell::compile(std::vector<std::string>& program,
             // pop arguments from the stack
             for (int i = 0; i < args_count; ++i)
             {
-                func.push_back("SWAP");
+                func.push_back("SWAP 1");
                 func.push_back("POP");
             }
+            if (args_count % 2)
+                func.push_back("SWAP 0");                
             // compile body
             list[2].compile(func, functions);
             // SWAP pc and result
-            func.push_back("SWAP");
-            // unload local definition from env
-            func.push_back("LOADENV");
-            for (int i = 0; i < args_count; ++i)
-                func.push_back("PUSHCDR");
-            func.push_back("STOREENV");
-            for (int i = 0; i < args_count; ++i)
-                func.push_back("POP");
+            func.push_back("SWAP 0");
+            func.push_back("STOREENV"); // restore env
+            func.push_back("SWAP 0");
             func.push_back("RET");
             functions.push_back(func);
+            program.push_back("LOADENV");
             program.push_back("PUSHL " + std::to_string(functions.size() - 1));
         }
         else // function call
@@ -611,11 +610,15 @@ int main()
 {
     std::vector<std::string> program;
     std::vector<std::vector<std::string>> functions;
-    parse_list("(define y (+ 8 (- 10 3)))").compile(program, functions);
-    parse_list("(define z 50)").compile(program, functions);
+    //parse_list("(define y (+ 8 (- 10 3)))").compile(program, functions);
+    //parse_list("(define z 50)").compile(program, functions);
     parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
-    parse_list("(define sofs (lambda (x y) (+ (square x) (square y))))").compile(program, functions);
-    parse_list("(sofs 2 3)").compile(program, functions);
+    parse_list("(square 2)").compile(program, functions);
+    //parse_list("(define sofs (lambda (x y) (+ (square x) (square y))))").compile(program, functions);
+    //parse_list("(sofs 2 3)").compile(program, functions);
+    //parse_list("(define closure (lambda (x) (lambda (y) (+ x y))))").compile(program, functions);
+    //parse_list("(define closure1 (closure 1))").compile(program, functions);
+    //parse_list("(closure1 2)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)

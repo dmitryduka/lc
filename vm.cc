@@ -12,7 +12,10 @@ struct Cell
     union {
         char      string[8];
         int       integer;
-        uint32_t  lambda_addr;
+        struct {
+            uint32_t  lambda_addr;
+            Cell*     lambda_env;
+        };
         struct {
             Cell* left;
             Cell* right;
@@ -156,8 +159,8 @@ struct VM
                 memory.push_back(x); memory.push_back(y);
             }
             const size_t memsize = memory.size();
-            Cell* left = &memory[memsize - 2];
             Cell* right = &memory[memsize - 1];
+            Cell* left = &memory[memsize - 2];
             stack.push_back(Cell::make_pair(left, right));            
         }
         else if (op == "PUSHCAR")
@@ -214,13 +217,22 @@ struct VM
             pc = std::stoi(tokens[1]);
             dont_step_pc = true;
         }
+        else if (op == "PUSHNIL")
+        {
+            stack.push_back(Cell::make_nil());
+        }
         else if (op == "PUSHPC")
         {
             stack.push_back(Cell::make_integer(pc));
         }
         else if (op == "PUSHL")
         {
-            stack.push_back(Cell::make_lambda(std::stoi(tokens[1])));
+            Cell l = Cell::make_lambda(std::stoi(tokens[1]));
+            // migrate env from stack to memory
+            Cell e = stack.back(); stack.pop_back();
+            memory.push_back(e);
+            l.lambda_env = &memory[memory.size() - 1];
+            stack.push_back(l);
         }
         else if (op == "PUSHFS")
         {
@@ -235,7 +247,10 @@ struct VM
             if (stack.empty()) return panic(op, "Empty stack");
             if (stack.back().type != Cell::Lambda) return panic(op, "Type mismatch");
             int old_pc = pc;
-            pc = stack.back().lambda_addr; stack.pop_back();
+            pc = stack.back().lambda_addr; 
+            if (stack.back().lambda_env) env = *stack.back().lambda_env;
+            else return panic(op, "Lambda has no bound env");
+            stack.pop_back();            
             stack.push_back(Cell::make_integer(old_pc + 1));
             dont_step_pc = true;                        
         }
@@ -259,10 +274,9 @@ struct VM
         else if (op == "SWAP")
         {
             if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
-            stack.push_back(x);
-            stack.push_back(y);
+            Cell tmp = stack.back();
+            stack.back() = stack[stack.size() - 2 - std::stoi(tokens[1])];
+            stack[stack.size() - 1 - std::stoi(tokens[1])] = tmp;
         }
         if (!dont_step_pc) pc += 1;
         ticks += 1;
