@@ -207,7 +207,7 @@ struct VM
             }
             else return panic(op, "Comparing pairs is not supported");
         }
-        else if (op == "GT")
+        else if (op == "LT")
         {
             if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
             Cell x = stack.back(); stack.pop_back();
@@ -215,7 +215,7 @@ struct VM
             if (x.type != y.type) return panic(op, "Type mismatch");
             if (x.type == Cell::Int)
             {
-                if (y.integer > x.integer) stack.push_back(Cell::make_integer(1));
+                if (y.integer < x.integer) stack.push_back(Cell::make_integer(1));
                 else stack.push_back(Cell::make_integer(0));
             }
             else return panic(op, "Type mismatch");

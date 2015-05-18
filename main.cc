@@ -444,71 +444,113 @@ void Cell::compile(std::vector<std::string>& program,
     else if (type == List)
     {
         if (list.empty()) return;
-        else if (list[0].name == "+") { compile_args(list, program, functions); program.push_back("ADD"); }
-        else if (list[0].name == "-") { compile_args(list, program, functions); program.push_back("SUB"); }
-        else if (list[0].name == "*") { compile_args(list, program, functions); program.push_back("MUL"); }
-        else if (list[0].name == "/") { compile_args(list, program, functions); program.push_back("DIV"); }
-        else if (list[0].name == ">")
+        else if (list[0].type == Cell::Int) list[0].compile(program, functions);
+        else if (list[0].type == Cell::Symbol)
         {
-             compile_args(list, program, functions); 
-             program.push_back("GT");
-        }
-        else if (list[0].name == "eq")
-        {
-             compile_args(list, program, functions); 
-             program.push_back("EQ");
-        }
-        else if (list[0].name == "define")
-        {
-            program.push_back("LOADENV");
-            list[2].compile(program, functions);
-            program.push_back("PUSHS " + list[1].name);
-            program.push_back("CONS");
-            program.push_back("CONS");
-            program.push_back("STOREENV");
-        }
-        else if (list[0].name == "cond")
-        {
-        }
-        else if (list[0].name == "lambda")
-        {
-            // create new environment and bind arguments
-            const size_t args_count = list[1].list.size();
-            std::vector<std::string> func;
-            for (int i = 0; i < args_count; ++i)
+            if (list[0].name == "+") { compile_args(list, program, functions); program.push_back("ADD"); }
+            else if (list[0].name == "-") { compile_args(list, program, functions); program.push_back("SUB"); }
+            else if (list[0].name == "*") { compile_args(list, program, functions); program.push_back("MUL"); }
+            else if (list[0].name == "/") { compile_args(list, program, functions); program.push_back("DIV"); }
+            else if (list[0].name == "less")
             {
-                func.push_back("LOADENV");
-                func.push_back("PUSHFS " + std::to_string(2 + args_count - i)); // 2 - PC and env
-                func.push_back("PUSHS " + list[1].list[i].name);
-                func.push_back("CONS");
-                func.push_back("CONS");
-                func.push_back("STOREENV");
+                 compile_args(list, program, functions); 
+                 program.push_back("LT");
             }
-            // pop arguments from the stack
-            for (int i = 0; i < args_count; ++i)
+            else if (list[0].name == "eq")
             {
-                func.push_back("SWAP 1");
-                func.push_back("POP");
+                 compile_args(list, program, functions); 
+                 program.push_back("EQ");
             }
-            if (args_count % 2)
-                func.push_back("SWAP 0");                
-            // compile body
-            list[2].compile(func, functions);
-            // SWAP pc and result
-            func.push_back("SWAP 1"); 
-            func.push_back("SWAP 0"); 
-            func.push_back("RET");
-            functions.push_back(func);
-            program.push_back("LOADENV");
-            program.push_back("PUSHL " + std::to_string(functions.size() - 1));
-        }
-        else // function call
-        {
-            compile_args(list, program, functions); 
-            Cell f(Symbol);
-            f.name = list[0].name;
-            f.compile(program, functions);
-            program.push_back("CALL");
+            else if (list[0].name == "define")
+            {
+                program.push_back("LOADENV");
+                list[2].compile(program, functions);
+                program.push_back("PUSHS " + list[1].name);
+                program.push_back("CONS");
+                program.push_back("CONS");
+                program.push_back("STOREENV");
+            }
+            else if (list[0].name == "cond")
+            {
+                std::vector<std::vector<std::string>> conditions;
+                std::vector<std::vector<std::string>> results;
+                for (int i = 1; i < list.size(); ++i)
+                {
+                    if (i % 2)
+                    {
+                        std::vector<std::string> cond;
+                        list[i].compile(cond, functions);
+                        conditions.push_back(cond);
+                    }
+                    else
+                    {
+                        std::vector<std::string> result;
+                        list[i].compile(result, functions);
+                        results.push_back(result);
+                    }
+                }
+                for (int i = 0; i < conditions.size(); ++i)
+                {
+                    if (i != 0)
+                        program.push_back("POP");
+                    for (auto& line : conditions[i])
+                        program.push_back(line);
+                    if (i != conditions.size() - 1)
+                        program.push_back("RJZ " + std::to_string(results[i].size() + 3));
+                    else
+                        program.push_back("RJZ " + std::to_string(results[i].size() + 2));
+                    program.push_back("POP");
+                    for (auto& line : results[i])
+                        program.push_back(line);
+                    if (i != conditions.size() - 1)
+                    {
+                        size_t jump = 0;
+                        for (int j = i + 1; j < conditions.size(); ++j)
+                            jump += conditions[j].size() + results[j].size() + 4;
+                        program.push_back("RJMP " + std::to_string(jump));
+                    }
+                }                
+            }
+            else if (list[0].name == "lambda")
+            {
+                // create new environment and bind arguments
+                const size_t args_count = list[1].list.size();
+                std::vector<std::string> func;
+                for (int i = 0; i < args_count; ++i)
+                {
+                    func.push_back("LOADENV");
+                    func.push_back("PUSHFS " + std::to_string(2 + args_count - i)); // 2 - PC and env
+                    func.push_back("PUSHS " + list[1].list[i].name);
+                    func.push_back("CONS");
+                    func.push_back("CONS");
+                    func.push_back("STOREENV");
+                }
+                // pop arguments from the stack
+                for (int i = 0; i < args_count; ++i)
+                {
+                    func.push_back("SWAP 1");
+                    func.push_back("POP");
+                }
+                if (args_count % 2)
+                    func.push_back("SWAP 0");                
+                // compile body
+                list[2].compile(func, functions);
+                // SWAP pc and result
+                func.push_back("SWAP 1"); 
+                func.push_back("SWAP 0"); 
+                func.push_back("RET");
+                functions.push_back(func);
+                program.push_back("LOADENV");
+                program.push_back("PUSHL " + std::to_string(functions.size() - 1));
+            }
+            else // function call
+            {
+                compile_args(list, program, functions); 
+                Cell f(Symbol);
+                f.name = list[0].name;
+                f.compile(program, functions);
+                program.push_back("CALL");
+            }
         }
     }
 }
@@ -623,13 +665,21 @@ int main()
     std::vector<std::vector<std::string>> functions;
     //parse_list("(define y (+ 8 (- 10 3)))").compile(program, functions);
     //parse_list("(define z 50)").compile(program, functions);
-    parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
+    parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
+    parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
+    parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
+    parse_list("(define neq (lambda (x y) (not (eq x y))))").compile(program, functions);
+    parse_list("(define more (lambda (x y) (cond (not (less x y)) (cond (neq x y) 1 (1) 0) (1) 0)))").compile(program, functions);
+    //parse_list("(define not (lambda (x) (cond (eq x 1) 0 (1) 1)))").compile(program, functions);
     //parse_list("(define sofs (lambda (x y z) (+ (square x) (+ (square z) (square y)))))").compile(program, functions);
     //parse_list("(square (+ (sofs 2 3 4) (sofs 2 3 4)))").compile(program, functions);
     //parse_list("(define adder (lambda (x) (lambda (y) (+ x y))))").compile(program, functions);
     //parse_list("(define inc (adder 1))").compile(program, functions);
-    parse_list("(define apply (lambda (f x) (f x)))").compile(program, functions);
-    parse_list("(apply square 4)").compile(program, functions);
+    //parse_list("(define apply (lambda (f x) (f x)))").compile(program, functions);
+    //parse_list("(apply square 4)").compile(program, functions);
+    parse_list("(odd? 6)").compile(program, functions);
+    parse_list("(even? 6)").compile(program, functions);
+    parse_list("(more 2 6)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
