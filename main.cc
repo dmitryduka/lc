@@ -448,6 +448,16 @@ void Cell::compile(std::vector<std::string>& program,
         else if (list[0].name == "-") { compile_args(list, program, functions); program.push_back("SUB"); }
         else if (list[0].name == "*") { compile_args(list, program, functions); program.push_back("MUL"); }
         else if (list[0].name == "/") { compile_args(list, program, functions); program.push_back("DIV"); }
+        else if (list[0].name == ">")
+        {
+             compile_args(list, program, functions); 
+             program.push_back("GT");
+        }
+        else if (list[0].name == "eq")
+        {
+             compile_args(list, program, functions); 
+             program.push_back("EQ");
+        }
         else if (list[0].name == "define")
         {
             program.push_back("LOADENV");
@@ -456,6 +466,9 @@ void Cell::compile(std::vector<std::string>& program,
             program.push_back("CONS");
             program.push_back("CONS");
             program.push_back("STOREENV");
+        }
+        else if (list[0].name == "cond")
+        {
         }
         else if (list[0].name == "lambda")
         {

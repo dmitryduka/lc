@@ -181,6 +181,45 @@ struct VM
             else
                 stack.push_back(Cell::make_nil());
         }
+        else if (op == "EQ")
+        {
+            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+            Cell x = stack.back(); stack.pop_back();
+            Cell y = stack.back(); stack.pop_back();
+            if (x.type != y.type) return panic(op, "Type mismatch");
+            if (x.type == Cell::Int)
+            {
+                if (x.integer == y.integer) stack.push_back(Cell::make_integer(1));
+                else stack.push_back(Cell::make_integer(0));
+            }
+            else if (x.type == Cell::String)
+            {
+                if (std::string(x.string) == std::string(y.string)) 
+                    stack.push_back(Cell::make_integer(1));
+                else stack.push_back(Cell::make_integer(0));
+            }
+            else if (x.type == Cell::Nil)
+                stack.push_back(Cell::make_integer(1));
+            else if (x.type == Cell::Lambda)
+            {
+                if (x.lambda_addr == y.lambda_addr) stack.push_back(Cell::make_integer(1));
+                else stack.push_back(Cell::make_integer(0));
+            }
+            else return panic(op, "Comparing pairs is not supported");
+        }
+        else if (op == "GT")
+        {
+            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+            Cell x = stack.back(); stack.pop_back();
+            Cell y = stack.back(); stack.pop_back();
+            if (x.type != y.type) return panic(op, "Type mismatch");
+            if (x.type == Cell::Int)
+            {
+                if (y.integer > x.integer) stack.push_back(Cell::make_integer(1));
+                else stack.push_back(Cell::make_integer(0));
+            }
+            else return panic(op, "Type mismatch");
+        }
         else if (op == "EQSI")
         {
             if (stack.empty()) return panic(op, "Empty stack");
