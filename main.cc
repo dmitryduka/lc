@@ -462,7 +462,6 @@ void Cell::compile(std::vector<std::string>& program,
             // create new environment and bind arguments
             const size_t args_count = list[1].list.size();
             std::vector<std::string> func;
-            func.push_back("LOADENV"); // save env
             for (int i = 0; i < args_count; ++i)
             {
                 func.push_back("LOADENV");
@@ -483,9 +482,8 @@ void Cell::compile(std::vector<std::string>& program,
             // compile body
             list[2].compile(func, functions);
             // SWAP pc and result
-            func.push_back("SWAP 0");
-            func.push_back("STOREENV"); // restore env
-            func.push_back("SWAP 0");
+            func.push_back("SWAP 1"); 
+            func.push_back("SWAP 0"); 
             func.push_back("RET");
             functions.push_back(func);
             program.push_back("LOADENV");
@@ -613,12 +611,12 @@ int main()
     //parse_list("(define y (+ 8 (- 10 3)))").compile(program, functions);
     //parse_list("(define z 50)").compile(program, functions);
     parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
-    parse_list("(square 2)").compile(program, functions);
-    //parse_list("(define sofs (lambda (x y) (+ (square x) (square y))))").compile(program, functions);
-    //parse_list("(sofs 2 3)").compile(program, functions);
-    //parse_list("(define closure (lambda (x) (lambda (y) (+ x y))))").compile(program, functions);
-    //parse_list("(define closure1 (closure 1))").compile(program, functions);
-    //parse_list("(closure1 2)").compile(program, functions);
+    //parse_list("(define sofs (lambda (x y z) (+ (square x) (+ (square z) (square y)))))").compile(program, functions);
+    //parse_list("(square (+ (sofs 2 3 4) (sofs 2 3 4)))").compile(program, functions);
+    //parse_list("(define adder (lambda (x) (lambda (y) (+ x y))))").compile(program, functions);
+    //parse_list("(define inc (adder 1))").compile(program, functions);
+    parse_list("(define apply (lambda (f x) (f x)))").compile(program, functions);
+    parse_list("(apply square 4)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)

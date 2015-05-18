@@ -247,17 +247,19 @@ struct VM
             if (stack.empty()) return panic(op, "Empty stack");
             if (stack.back().type != Cell::Lambda) return panic(op, "Type mismatch");
             int old_pc = pc;
-            pc = stack.back().lambda_addr; 
+            pc = stack.back().lambda_addr;
+            Cell oldenv = env;
             if (stack.back().lambda_env) env = *stack.back().lambda_env;
             else return panic(op, "Lambda has no bound env");
             stack.pop_back();            
             stack.push_back(Cell::make_integer(old_pc + 1));
+            stack.push_back(oldenv);
             dont_step_pc = true;                        
         }
         else if (op == "RET")
         {
-            pc = stack.back().integer;
-            stack.pop_back();
+            env = stack.back(); stack.pop_back();
+            pc = stack.back().integer; stack.pop_back();
             dont_step_pc = true;
         }
         else if (op == "POP")
@@ -276,7 +278,7 @@ struct VM
             if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
             Cell tmp = stack.back();
             stack.back() = stack[stack.size() - 2 - std::stoi(tokens[1])];
-            stack[stack.size() - 1 - std::stoi(tokens[1])] = tmp;
+            stack[stack.size() - 2 - std::stoi(tokens[1])] = tmp;
         }
         if (!dont_step_pc) pc += 1;
         ticks += 1;
