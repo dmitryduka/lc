@@ -240,6 +240,14 @@ struct VM
             }
             else return panic(op, "Type mismatch");
         }
+        else if (op == "EQT")
+        {
+            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+            Cell& x = stack[stack.size() - 1];
+            Cell& y = stack[stack.size() - 2];
+            if (x.type == y.type) stack.push_back(Cell::make_integer(1));
+            else stack.push_back(Cell::make_integer(0));            
+        }
         else if (op == "EQSI")
         {
             if (stack.empty()) return panic(op, "Empty stack");

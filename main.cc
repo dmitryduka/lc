@@ -423,24 +423,27 @@ void Cell::compile(std::vector<std::string>& program,
                    std::vector<std::vector<std::string>>& functions) const
 {
     if (type == Int) program.push_back("PUSHCI " + std::to_string(as_int));
-    else if (type == Cell::Nil) program.push_back("PUSHNIL");
     else if (type == Symbol)
     {
-        program.push_back("LOADENV");
-        program.push_back("PUSHCAR");
-        program.push_back("PUSHCAR");
-        program.push_back("EQSI " + name);
-        program.push_back("RJNZ +6");
-        program.push_back("POP");
-        program.push_back("POP");
-        program.push_back("POP");
-        program.push_back("CDR");
-        program.push_back("RJMP -8");
-        program.push_back("POP");
-        program.push_back("POP");
-        program.push_back("CDR");
-        program.push_back("SWAP 0");
-        program.push_back("POP");
+    	if (name == "Nil") program.push_back("PUSHNIL");    		
+	    else
+    	{
+	        program.push_back("LOADENV");
+	        program.push_back("PUSHCAR");
+	        program.push_back("PUSHCAR");
+	        program.push_back("EQSI " + name);
+	        program.push_back("RJNZ +6");
+	        program.push_back("POP");
+	        program.push_back("POP");
+	        program.push_back("POP");
+	        program.push_back("CDR");
+	        program.push_back("RJMP -8");
+	        program.push_back("POP");
+	        program.push_back("POP");
+	        program.push_back("CDR");
+	        program.push_back("SWAP 0");
+	        program.push_back("POP");
+	    }
     }
     else if (type == List)
     {
@@ -469,6 +472,33 @@ void Cell::compile(std::vector<std::string>& program,
                 program.push_back("PUSHS " + list[1].name);
                 program.push_back("CONS");
                 program.push_back("DEF");
+            }
+            else if (list[0].name == "func?")
+            {
+                compile_args(list, program, functions); 
+                program.push_back("PUSHL -1"); 
+                program.push_back("EQT");      
+                program.push_back("SWAP 1");   
+                program.push_back("POP");      
+                program.push_back("POP");      
+            }
+            else if (list[0].name == "null?")
+            {
+                compile_args(list, program, functions); 
+                program.push_back("PUSHNIL");
+                program.push_back("EQT");    
+                program.push_back("SWAP 1");   
+                program.push_back("POP");      
+                program.push_back("POP");      
+            }
+            else if (list[0].name == "int?")
+            {
+                compile_args(list, program, functions); 
+                program.push_back("PUSHCI 0");
+                program.push_back("EQT");    
+                program.push_back("SWAP 1");   
+                program.push_back("POP");      
+                program.push_back("POP");      
             }
             else if (list[0].name == "cond")
             {
@@ -673,8 +703,19 @@ int main()
                                               (eq x 2) 1 \
                                               (1) (+ (fib (- x 1)) \
                                                      (fib (- x 2))))))").compile(program, functions);
-    parse_list("(fib 10)").compile(program, functions);
-    parse_list("(apply sofs 2 3)").compile(program, functions);
+    parse_list("(define cons (lambda (left right) (lambda (m) (cond (eq m 0) left (1) right))))").compile(program, functions);
+    parse_list("(define car (lambda (x) (cond (func? x) (x 0) (1) x)))").compile(program, functions);
+    parse_list("(define cdr (lambda (x) (cond (func? x) (x 1) (1) Nil)))").compile(program, functions);
+    parse_list("(define list (lambda (x) (cond (null? x) Nil (1) (cons (car x) (list (cdr x))))))").compile(program, functions);
+    parse_list("(define accum (lambda (op start l) \
+                                      (cond (null? l) start \
+                                            (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
+
+    parse_list("(fib 15)").compile(program, functions);
+    parse_list("(apply sofs 3 4)").compile(program, functions);
+    parse_list("(define l (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 (cons 6 (cons 7 Nil))))))))").compile(program, functions);
+    parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
+    parse_list("(accum add 0 l)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
@@ -684,7 +725,7 @@ int main()
     // lambdas
     //parse_list("(define square (lambda (x) (* x x)))").eval(env);
     //parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
-   // parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
+    //parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
     //parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
     //parse_list("(apply-func square 5)").eval(env).pretty_print();
     // fibonacci recursive
