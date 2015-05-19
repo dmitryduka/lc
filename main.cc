@@ -423,6 +423,7 @@ void Cell::compile(std::vector<std::string>& program,
                    std::vector<std::vector<std::string>>& functions) const
 {
     if (type == Int) program.push_back("PUSHCI " + std::to_string(as_int));
+    else if (type == Cell::Nil) program.push_back("PUSHNIL");
     else if (type == Symbol)
     {
         program.push_back("LOADENV");
@@ -445,6 +446,7 @@ void Cell::compile(std::vector<std::string>& program,
     {
         if (list.empty()) return;
         else if (list[0].type == Cell::Int) list[0].compile(program, functions);
+        else if (list[0].type == Cell::Nil) program.push_back("PUSHNIL");
         else if (list[0].type == Cell::Symbol)
         {
             if (list[0].name == "+") { compile_args(list, program, functions); program.push_back("ADD"); }
@@ -463,12 +465,10 @@ void Cell::compile(std::vector<std::string>& program,
             }
             else if (list[0].name == "define")
             {
-                program.push_back("LOADENV");
                 list[2].compile(program, functions);
                 program.push_back("PUSHS " + list[1].name);
                 program.push_back("CONS");
-                program.push_back("CONS");
-                program.push_back("STOREENV");
+                program.push_back("DEF");
             }
             else if (list[0].name == "cond")
             {
@@ -540,7 +540,6 @@ void Cell::compile(std::vector<std::string>& program,
                 func.push_back("SWAP 0"); 
                 func.push_back("RET");
                 functions.push_back(func);
-                program.push_back("LOADENV");
                 program.push_back("PUSHL " + std::to_string(functions.size() - 1));
             }
             else // function call
@@ -571,7 +570,11 @@ Cell parse_list(const char* input, const char** jumped_to = NULL)
             else if (c == ')' || c == ' ' || c == '\t' || c == '\n')
             {
                 if (symbol_ready)
-                {
+                {   
+                    // issue error in case symbol size is more than 7 characters:
+                    // it wont fit into the Cell in the VM
+                    // TODO: mangle names to shorter strings
+                    if (symbol.size() > 7) { std::cout << "Long names are not supported: " << symbol << endl; exit(1); }
                     cell.list.push_back(Cell(symbol));
                     symbol_ready = false;
                     symbol.clear();
@@ -663,39 +666,31 @@ int main()
 {
     std::vector<std::string> program;
     std::vector<std::vector<std::string>> functions;
-    //parse_list("(define y (+ 8 (- 10 3)))").compile(program, functions);
-    //parse_list("(define z 50)").compile(program, functions);
-    parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
-    parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
-    parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
-    parse_list("(define neq (lambda (x y) (not (eq x y))))").compile(program, functions);
-    parse_list("(define more (lambda (x y) (cond (not (less x y)) (cond (neq x y) 1 (1) 0) (1) 0)))").compile(program, functions);
-    //parse_list("(define not (lambda (x) (cond (eq x 1) 0 (1) 1)))").compile(program, functions);
-    //parse_list("(define sofs (lambda (x y z) (+ (square x) (+ (square z) (square y)))))").compile(program, functions);
-    //parse_list("(square (+ (sofs 2 3 4) (sofs 2 3 4)))").compile(program, functions);
-    //parse_list("(define adder (lambda (x) (lambda (y) (+ x y))))").compile(program, functions);
-    //parse_list("(define inc (adder 1))").compile(program, functions);
-    //parse_list("(define apply (lambda (f x) (f x)))").compile(program, functions);
-    //parse_list("(apply square 4)").compile(program, functions);
-    parse_list("(odd? 6)").compile(program, functions);
-    parse_list("(even? 6)").compile(program, functions);
-    parse_list("(more 2 6)").compile(program, functions);
+    parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
+    parse_list("(define sofs (lambda (x y) (+ (square x) (square y))))").compile(program, functions);
+    parse_list("(define apply (lambda (f x y) (f x y)))").compile(program, functions);
+    parse_list("(define fib (lambda (x) (cond (eq x 1) 1 \
+                                              (eq x 2) 1 \
+                                              (1) (+ (fib (- x 1)) \
+                                                     (fib (- x 2))))))").compile(program, functions);
+    parse_list("(fib 10)").compile(program, functions);
+    parse_list("(apply sofs 2 3)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
         cout << x << endl;
-    return 0;
 {
     shared_ptr<Env> env = Env::global();
     // lambdas
-    parse_list("(define square (lambda (x) (* x x)))").eval(env);
-    parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
-    parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
-    parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
-    parse_list("(apply-func square 5)").eval(env).pretty_print();
+    //parse_list("(define square (lambda (x) (* x x)))").eval(env);
+    //parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
+   // parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
+    //parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
+    //parse_list("(apply-func square 5)").eval(env).pretty_print();
     // fibonacci recursive
-    parse_list("(define fibonacci (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fibonacci (- x 1)) (fibonacci (- x 2))))))").eval(env);
-    parse_list("(fibonacci 12)").eval(env).pretty_print();
+    //parse_list("(define fib (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fib (- x 1)) (fib (- x 2))))))").eval(env);
+    //parse_list("(fib 20)").eval(env).pretty_print();
+    return 0;
     // predicates
     parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").eval(env);
     parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").eval(env);

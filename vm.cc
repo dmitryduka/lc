@@ -6,6 +6,9 @@
 using std::cout;
 using std::endl;
 
+const size_t STACK_SIZE  = 100000;
+const size_t MEMORY_SIZE = 100000;
+
 struct Cell
 {
     enum Type : uint8_t { Nil, Pair, Int, String, Lambda } type;
@@ -58,17 +61,22 @@ struct VM
 {
     std::vector<Cell> stack;
     std::vector<Cell> memory;
-    Cell env;
+    Cell* env;
     bool stop;
     int pc;
     int ticks;
     
-    VM() : env(Cell::Pair), stop(false), pc(0), ticks(0) { stack.reserve(1000); memory.reserve(1000); }
+    VM() : env(nullptr), stop(false), pc(0), ticks(0) 
+    { 
+    	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
+    	memory.push_back(Cell(Cell::Pair));
+    	env = &memory[memory.size() - 1];
+    }
 
     int get_env_size() 
     { 
         int c = 0; 
-        Cell* cur = &env; 
+        Cell* cur = env; 
         while (cur->left && cur->left->left) { cur = cur->right; c++; } 
         return c; 
     }
@@ -140,14 +148,30 @@ struct VM
             if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(y.integer / x.integer));
         }
+        else if (op == "DEF")
+        {
+            if (stack.empty()) return panic(op, "Not enough elements on the stack");
+            Cell xy = stack.back(); stack.pop_back();
+            memory.push_back(xy);
+           	memory.push_back(*env);
+           	env->right = &memory.back(); 
+           	env->left = &memory[memory.size() - 2];
+        }
+        else if (op == "UNDEF")
+        {
+        	// TODO
+        }
         else if (op == "LOADENV")
         {
-            stack.push_back(env);
+            stack.push_back(*env);
         }
         else if (op == "STOREENV")
         {
             if (stack.empty()) panic(op, "Not enough elements on the stack");
-            env = stack.back(); stack.pop_back();
+            // migrate env from stack to memory
+            Cell e = stack.back(); stack.pop_back();
+            memory.push_back(e);
+            env = &memory[memory.size() - 1];
         }
         else if (op == "CONS")
         {
@@ -267,10 +291,7 @@ struct VM
         else if (op == "PUSHL")
         {
             Cell l = Cell::make_lambda(std::stoi(tokens[1]));
-            // migrate env from stack to memory
-            Cell e = stack.back(); stack.pop_back();
-            memory.push_back(e);
-            l.lambda_env = &memory[memory.size() - 1];
+            l.lambda_env = env;
             stack.push_back(l);
         }
         else if (op == "PUSHFS")
@@ -287,8 +308,8 @@ struct VM
             if (stack.back().type != Cell::Lambda) return panic(op, "Type mismatch");
             int old_pc = pc;
             pc = stack.back().lambda_addr;
-            Cell oldenv = env;
-            if (stack.back().lambda_env) env = *stack.back().lambda_env;
+            Cell oldenv = *env;
+            if (stack.back().lambda_env) env = stack.back().lambda_env;
             else return panic(op, "Lambda has no bound env");
             stack.pop_back();            
             stack.push_back(Cell::make_integer(old_pc + 1));
@@ -297,7 +318,10 @@ struct VM
         }
         else if (op == "RET")
         {
-            env = stack.back(); stack.pop_back();
+            // migrate env from stack to memory
+            Cell e = stack.back(); stack.pop_back();
+            memory.push_back(e);
+            env = &memory.back();
             pc = stack.back().integer; stack.pop_back();
             dont_step_pc = true;
         }
@@ -333,7 +357,7 @@ struct VM
         for (auto x : stack)
             cout << "    " << x.pp() << endl;            
         cout << "  Env size: " << get_env_size() << endl;
-        Cell* cur = &env;
+        Cell* cur = env;
         while (cur->left && cur->left->left)
         {
             cout << "    " << cur->left->left->pp() << " -> " << cur->left->right->pp() << endl;
