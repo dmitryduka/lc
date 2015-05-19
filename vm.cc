@@ -157,10 +157,6 @@ struct VM
            	env->right = &memory.back(); 
            	env->left = &memory[memory.size() - 2];
         }
-        else if (op == "UNDEF")
-        {
-        	// TODO
-        }
         else if (op == "LOADENV")
         {
             stack.push_back(*env);
