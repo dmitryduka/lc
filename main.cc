@@ -711,27 +711,27 @@ int main()
                                       (cond (null? l) start \
                                             (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
 
-    parse_list("(fib 15)").compile(program, functions);
+    //parse_list("(fib 15)").compile(program, functions);
     parse_list("(apply sofs 3 4)").compile(program, functions);
     parse_list("(define l (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 (cons 6 (cons 7 Nil))))))))").compile(program, functions);
     parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
-    parse_list("(accum add 0 l)").compile(program, functions);
+    //parse_list("(accum add 0 l)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
         cout << x << endl;
+    return 0;
 {
     shared_ptr<Env> env = Env::global();
     // lambdas
-    //parse_list("(define square (lambda (x) (* x x)))").eval(env);
-    //parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
-    //parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
-    //parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
-    //parse_list("(apply-func square 5)").eval(env).pretty_print();
+    parse_list("(define square (lambda (x) (* x x)))").eval(env);
+    parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
+    parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
+    parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
+    parse_list("(apply-func square 5)").eval(env).pretty_print();
     // fibonacci recursive
-    //parse_list("(define fib (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fib (- x 1)) (fib (- x 2))))))").eval(env);
-    //parse_list("(fib 20)").eval(env).pretty_print();
-    return 0;
+    parse_list("(define fib (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fib (- x 1)) (fib (- x 2))))))").eval(env);
+    parse_list("(fib 20)").eval(env).pretty_print();
     // predicates
     parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").eval(env);
     parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").eval(env);

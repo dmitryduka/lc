@@ -2,6 +2,7 @@
 #include <vector>
 #include <cstdint>
 #include <sstream>
+#include <fstream>
 
 using std::cout;
 using std::endl;
@@ -369,6 +370,80 @@ struct VM
         }
         cout << "  Memory size: " << memory.size() << endl;
     }
+
+    void dump_graph()
+    {
+        std::ofstream ofs("graph.txt");
+        ofs << "digraph test {" << endl;
+        for (auto& x : memory)
+        {
+            Cell* p = &x;
+            bool used = false;
+            std::string xtype;
+            if (x.type == Cell::Pair) xtype = "P_";
+            else if (x.type == Cell::Lambda) xtype = "L_";
+            else if (x.type == Cell::Int) xtype = "I_" + std::to_string(x.integer) + "_";
+            else if (x.type == Cell::Nil) xtype = "N_";
+            else if (x.type == Cell::String) xtype = "S_" + std::string(x.string) + "_";
+            if (env == p) used = true;
+            if (!used)
+                for (auto& y : memory)
+                    if (y.type == Cell::Pair)
+                        if (y.left == p || y.right == p) 
+                        { 
+                            ofs << "P_" << &y << " -> " << xtype << &x << endl; 
+                            used = true; break; 
+                        }
+                    else if (y.type == Cell::Lambda)
+                        if (y.lambda_env == p) 
+                        { 
+                            ofs << "L_" << &y << " -> " << xtype << &x << endl; 
+                            used = true; break; 
+                        }
+            if (!used)
+                for (auto& y : stack)
+                    if (y.type == Cell::Pair)
+                        if (y.left == p || y.right == p) 
+                        { 
+                            ofs << "SP_" << &y << " -> " << xtype << &x << endl; 
+                            used = true; break; 
+                        }
+                    else if (y.type == Cell::Lambda)
+                        if (y.lambda_env == p) 
+                        { 
+                            ofs << "SL_" << &y << " -> " << xtype << &x << endl; 
+                            used = true; break; 
+                        }
+        }
+        ofs << "}" << endl;
+    }
+
+    void gc()
+    {
+        size_t orphaned = 0;
+        cout << "Garbage collecting: " << memory.size() << " cells" << endl;
+        for (auto& x : memory)
+        {
+            Cell* p = &x;
+            bool used = false;
+            if (env == p) used = true;
+            if (!used)
+                for (auto& y : memory)
+                    if (y.type == Cell::Pair)
+                        if (y.left == p || y.right == p) { used = true; break; }
+                    else if (y.type == Cell::Lambda)
+                        if (y.lambda_env == p) { used = true; break; }
+            if (!used)
+                for (auto& y : stack)
+                    if (y.type == Cell::Pair)
+                        if (y.left == p || y.right == p) { used = true; break; }
+                    else if (y.type == Cell::Lambda)
+                        if (y.lambda_env == p) { used = true; break; }
+            if (!used) orphaned += 1;
+        }
+        cout << "  Found orphaned cells: " << orphaned << endl;
+        cout << "  Found used cells: " << memory.size() - orphaned << endl;
+    }
 };
 
 
@@ -381,6 +456,8 @@ int main()
     VM vm;   
     vm.run(program);
     vm.debug();
+    vm.gc();
+    vm.dump_graph();
     return 0;    
 }
 
