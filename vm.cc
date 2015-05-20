@@ -12,7 +12,9 @@ const size_t MEMORY_SIZE = 100000;
 
 struct Cell
 {
-    enum Type : uint8_t { Nil, Pair, Int, String, Lambda } type;
+    enum Type : uint8_t { Nil, Pair, Int, String, Lambda };
+    Type type;
+    char refcount;
     union {
         char      string[8];
         int       integer;
@@ -26,7 +28,7 @@ struct Cell
         };
     };
 
-    Cell(Type x) : type(x), left(nullptr), right(nullptr) {}
+    Cell(Type x) : type(x), refcount(0), left(nullptr), right(nullptr) {}
     std::string type_to_string()
     {
         if (type == Pair) return "Pair";
@@ -378,71 +380,65 @@ struct VM
         for (auto& x : memory)
         {
             Cell* p = &x;
-            bool used = false;
             std::string xtype;
-            if (x.type == Cell::Pair) xtype = "P_";
+            if (x.type == Cell::Pair) xtype = p == env ? "ENV_P_" : "P_";
             else if (x.type == Cell::Lambda) xtype = "L_";
             else if (x.type == Cell::Int) xtype = "I_" + std::to_string(x.integer) + "_";
             else if (x.type == Cell::Nil) xtype = "N_";
             else if (x.type == Cell::String) xtype = "S_" + std::string(x.string) + "_";
-            if (env == p) used = true;
-            if (!used)
-                for (auto& y : memory)
-                    if (y.type == Cell::Pair)
-                        if (y.left == p || y.right == p) 
-                        { 
-                            ofs << "P_" << &y << " -> " << xtype << &x << endl; 
-                            used = true; break; 
-                        }
-                    else if (y.type == Cell::Lambda)
-                        if (y.lambda_env == p) 
-                        { 
-                            ofs << "L_" << &y << " -> " << xtype << &x << endl; 
-                            used = true; break; 
-                        }
-            if (!used)
-                for (auto& y : stack)
-                    if (y.type == Cell::Pair)
-                        if (y.left == p || y.right == p) 
-                        { 
-                            ofs << "SP_" << &y << " -> " << xtype << &x << endl; 
-                            used = true; break; 
-                        }
-                    else if (y.type == Cell::Lambda)
-                        if (y.lambda_env == p) 
-                        { 
-                            ofs << "SL_" << &y << " -> " << xtype << &x << endl; 
-                            used = true; break; 
-                        }
+            for (auto& y : memory)
+                if (y.type == Cell::Pair)
+                    if (y.left == p || y.right == p) 
+                    { 
+                        ofs << "edge [style=solid,color=black];" << endl;
+                        ofs << (&y == env ? "ENV_P_" : "P_") << &y << " -> " << xtype << p << endl;
+                        if (!y.refcount) ofs << (&y == env ? "ENV_P_" : "P_") << &y << " [style=filled,color=gray];" << endl;
+                        if (!p->refcount) ofs << xtype << p << " [style=filled,color=gray];" << endl;
+                    }
+                    else if (x.type == Cell::Lambda && x.lambda_env == &y)
+                    {
+                        ofs << "edge [style=dashed,color=red];" << endl;
+                        ofs << "L_" << p << " -> P_" << &y  << endl;                         
+                        if (!y.refcount) ofs << "P_" << &y << " [style=filled,color=gray];" << endl;
+                        if (!p->refcount) ofs << "L_" << p << " [style=filled,color=gray];" << endl;
+                    }
+                else if (y.type == Cell::Lambda)
+                    if (y.lambda_env == p)
+                    { 
+                        ofs << "edge [style=dashed,color=red];" << endl;
+                        ofs << "L_" << &y << " -> " << xtype << p << endl; 
+                        if (!y.refcount) ofs << "L_" << &y << " [style=filled,color=gray];" << endl;
+                        if (!p->refcount) ofs << xtype << p << " [style=filled,color=gray];" << endl;
+                    }
         }
         ofs << "}" << endl;
     }
 
+    void gc_recursive(Cell* root)
+    {
+        if (!root) return;
+        if (root->refcount) return;
+        root->refcount++;
+        if (root->type == Cell::Lambda) return gc_recursive(root->lambda_env);
+        if (root->type == Cell::Pair) { gc_recursive(root->left); gc_recursive(root->right); }
+    }
+
     void gc()
     {
-        size_t orphaned = 0;
+        size_t used = 0;
         cout << "Garbage collecting: " << memory.size() << " cells" << endl;
+        gc_recursive(env->left);
+        gc_recursive(env->right);
+        std::ofstream ofs("stat.txt");
         for (auto& x : memory)
-        {
-            Cell* p = &x;
-            bool used = false;
-            if (env == p) used = true;
-            if (!used)
-                for (auto& y : memory)
-                    if (y.type == Cell::Pair)
-                        if (y.left == p || y.right == p) { used = true; break; }
-                    else if (y.type == Cell::Lambda)
-                        if (y.lambda_env == p) { used = true; break; }
-            if (!used)
-                for (auto& y : stack)
-                    if (y.type == Cell::Pair)
-                        if (y.left == p || y.right == p) { used = true; break; }
-                    else if (y.type == Cell::Lambda)
-                        if (y.lambda_env == p) { used = true; break; }
-            if (!used) orphaned += 1;
-        }
-        cout << "  Found orphaned cells: " << orphaned << endl;
-        cout << "  Found used cells: " << memory.size() - orphaned << endl;
+            if (x.refcount)
+            {
+                used += 1;
+                ofs << "1" << endl;
+            }
+            else ofs << "0" << endl;                
+        cout << "  Found orphaned cells: " << memory.size() - used << endl;
+        cout << "  Found used cells: " << used << endl;
     }
 };
 
@@ -457,7 +453,6 @@ int main()
     vm.run(program);
     vm.debug();
     vm.gc();
-    vm.dump_graph();
     return 0;    
 }
 

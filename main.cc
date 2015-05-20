@@ -711,11 +711,15 @@ int main()
                                       (cond (null? l) start \
                                             (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
 
-    //parse_list("(fib 15)").compile(program, functions);
-    parse_list("(apply sofs 3 4)").compile(program, functions);
+    parse_list("(define append (lambda (x y) (cond (null? x) y \
+                                                    (1) (cons (cond (func? x) (car x) (1) x) (cond (null? (cdr x)) y\
+                                                                             (1) (append (cdr x) y))))))").compile(program, functions);
+    parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (car l)) (map f (cdr l))))))").compile(program, functions);
+    parse_list("(fib 15)").compile(program, functions);
+    parse_list("(apply sofs 2 3)").compile(program, functions);
     parse_list("(define l (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 (cons 6 (cons 7 Nil))))))))").compile(program, functions);
     parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
-    //parse_list("(accum add 0 l)").compile(program, functions);
+    parse_list("(accum add 0 (map square l))").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
