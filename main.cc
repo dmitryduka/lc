@@ -466,12 +466,29 @@ void Cell::compile(std::vector<std::string>& program,
                  compile_args(list, program, functions); 
                  program.push_back("EQ");
             }
+            else if (list[0].name == "cons")
+            {
+		         list[2].compile(program, functions);
+		         list[1].compile(program, functions);
+                 program.push_back("CONS");
+            }
+            else if (list[0].name == "car")
+            {
+                 compile_args(list, program, functions); 
+                 program.push_back("CAR");
+            }
+            else if (list[0].name == "cdr")
+            {
+                 compile_args(list, program, functions); 
+                 program.push_back("CDR");
+            }
             else if (list[0].name == "define")
             {
                 list[2].compile(program, functions);
                 program.push_back("PUSHS " + list[1].name);
                 program.push_back("CONS");
                 program.push_back("DEF");
+                program.push_back("PUSHS " + list[1].name);
             }
             else if (list[0].name == "func?")
             {
@@ -500,6 +517,24 @@ void Cell::compile(std::vector<std::string>& program,
                 program.push_back("POP");      
                 program.push_back("POP");      
             }
+            else if (list[0].name == "str?")
+            {
+                compile_args(list, program, functions); 
+                program.push_back("PUSHS s");
+                program.push_back("EQT");    
+                program.push_back("SWAP 1");   
+                program.push_back("POP");      
+                program.push_back("POP");      
+            }
+            else if (list[0].name == "begin")
+            {
+                for (int i = 1; i < list.size() - 1; ++i)
+                {
+                    list[i].compile(program, functions);
+	                program.push_back("POP");      
+                }
+                list.back().compile(program, functions);
+	        }
             else if (list[0].name == "cond")
             {
                 std::vector<std::vector<std::string>> conditions;
@@ -696,30 +731,53 @@ int main()
 {
     std::vector<std::string> program;
     std::vector<std::vector<std::string>> functions;
+    parse_list("(define atom? (lambda (x) (cond (null? x) 1 \
+    											(func? x) 1 \
+    											(str? x) 1 \
+    											(int? x) 1 \
+    											(1) 0)))").compile(program, functions);
+    parse_list("(define first (lambda (x) (cond (atom? x) x (1) (car x))))").compile(program, functions);
+    parse_list("(define rest  (lambda (x) (cond (atom? x) Nil (1) (cdr x))))").compile(program, functions);
+    parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
+    parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
+    parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
     parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
-    parse_list("(define sofs (lambda (x y) (+ (square x) (square y))))").compile(program, functions);
-    parse_list("(define apply (lambda (f x y) (f x y)))").compile(program, functions);
-    parse_list("(define fib (lambda (x) (cond (eq x 1) 1 \
-                                              (eq x 2) 1 \
-                                              (1) (+ (fib (- x 1)) \
-                                                     (fib (- x 2))))))").compile(program, functions);
-    parse_list("(define cons (lambda (left right) (lambda (m) (cond (eq m 0) left (1) right))))").compile(program, functions);
-    parse_list("(define car (lambda (x) (cond (func? x) (x 0) (1) x)))").compile(program, functions);
-    parse_list("(define cdr (lambda (x) (cond (func? x) (x 1) (1) Nil)))").compile(program, functions);
-    parse_list("(define list (lambda (x) (cond (null? x) Nil (1) (cons (car x) (list (cdr x))))))").compile(program, functions);
+    parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
+    parse_list("(define append (lambda (x y) (cond (null? x) y \
+    											   (1) (cons (first x) (append (rest x) y)))))").compile(program, functions);
     parse_list("(define accum (lambda (op start l) \
                                       (cond (null? l) start \
                                             (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
-
-    parse_list("(define append (lambda (x y) (cond (null? x) y \
-                                                    (1) (cons (cond (func? x) (car x) (1) x) (cond (null? (cdr x)) y\
-                                                                             (1) (append (cdr x) y))))))").compile(program, functions);
-    parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (car l)) (map f (cdr l))))))").compile(program, functions);
-    parse_list("(fib 15)").compile(program, functions);
-    parse_list("(apply sofs 2 3)").compile(program, functions);
-    parse_list("(define l (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 (cons 6 (cons 7 Nil))))))))").compile(program, functions);
-    parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
-    parse_list("(accum add 0 (map square l))").compile(program, functions);
+    parse_list("(define reverse (lambda (l) (begin \
+    											(define rev-aux (lambda (x y) \
+    																		(cond (null? x) y \
+    											      							  (1) (rev-aux \
+    																			   			(rest x) \
+    																			   			(cons \
+    																			   				(first x) \
+    																			   				y))))) \
+    											(rev-aux l Nil))))").compile(program, functions);
+    parse_list("(define filter (lambda (pred l) \
+                                        (cond (null? l) Nil \
+                                              (1) (append (cond (pred (first l)) (first l) \
+                                                                (1) Nil) \
+                                                          (filter pred (rest l))))))").compile(program, functions);
+    parse_list("(define qsort (lambda (l) (begin (define f (first l)) \
+                                                 (define r (rest l)) \
+                                                 (define <= (lambda (x) (lambda (y) (cond (eq x y) 1 \
+                                                                                          (less y x) 1 \
+                                                                                          (1) 0)))) \
+                                                 (define > (lambda (x) (lambda (y) (cond (not (eq x y)) (cond (not (less y x)) 1 \
+                                                                                               					   (1) 0) \
+                                                                                         (1) 0)))) \
+                                                 (cond (null? l) Nil \
+                                                       (null? f) Nil \
+                                                       (null? r) f \
+                                                       (1) (append (qsort (filter (<= f) r)) \
+                                                                   (append f (qsort (filter (> f) r))))))))").compile(program, functions);
+    parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (first l)) (map f (rest l))))))").compile(program, functions);
+    parse_list("(define l1 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 Nil))))))))").compile(program, functions);
+    parse_list("(car (qsort l1))").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
@@ -803,7 +861,7 @@ int main()
     parse_list("(define print (lambda (l) (cond (null? l) (newline) \
                                                 (1) (begin (print* (car l)) \
                                                            (print (cdr l))))))").eval(env); 
-//    parse_list("(define curry (lambda (f x) (lambda () (f ))))").eval(env);
+    // parse_list("(define curry (lambda (f x) (lambda () (f ))))").eval(env);
     // currying
     parse_list("(define func (lambda (a b c d) (+ a b c d)))").eval(env);
     parse_list("(func 1 2 3 4)").eval(env).pretty_print();

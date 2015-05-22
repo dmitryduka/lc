@@ -84,7 +84,7 @@ struct VM
         return c; 
     }
 
-    void panic(const std::string& op, const std::string& text) { cout << "PANIC: " << op << ", " << text << endl; }
+    void panic(const std::string& op, const std::string& text) { cout << "PANIC: " << op << ", " << text << endl; stop = true; }
 
     std::vector<std::string> tokenize(const std::string x)
     {
@@ -189,7 +189,11 @@ struct VM
         else if (op == "PUSHCAR")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
+            //if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
+            if (stack.back().type == Cell::Int || 
+                stack.back().type == Cell::String ||
+                stack.back().type == Cell::Nil)                 
+                stack.push_back(stack.back());
             if (stack.back().left)
                 stack.push_back(*stack.back().left);
             else
@@ -198,7 +202,11 @@ struct VM
         else if (op == "PUSHCDR")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
+            //if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
+            if (stack.back().type == Cell::Int || 
+                stack.back().type == Cell::String ||
+                stack.back().type == Cell::Nil)                 
+                stack.push_back(Cell::make_nil());
             if (stack.back().right)
                 stack.push_back(*stack.back().right);
             else
@@ -336,6 +344,12 @@ struct VM
         {
             if (stack.empty()) return panic(op, "Empty stack");
             stack.pop_back();
+        }
+        else if (op == "CAR")
+        {
+            if (stack.empty()) return panic(op, "Empty stack");
+            if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
+            stack.back() = *stack.back().left;
         }
         else if (op == "CDR")
         {
