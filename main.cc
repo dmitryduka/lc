@@ -776,8 +776,11 @@ int main()
                                                        (1) (append (qsort (filter (<= f) r)) \
                                                                    (append f (qsort (filter (> f) r))))))))").compile(program, functions);
     parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (first l)) (map f (rest l))))))").compile(program, functions);
-    parse_list("(define l1 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 Nil))))))))").compile(program, functions);
-    parse_list("(car (qsort l1))").compile(program, functions);
+    parse_list("(define length (lambda (l) (cond (null? l) 0 (atom? l) 1 (1) (+ 1 (length (rest l))))))").compile(program, functions);
+    parse_list("(define l1 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 Nil)))))))))))))))))))))))))))))").compile(program, functions);
+    parse_list("(define l1s (qsort l1))").compile(program, functions);
+    parse_list("(car l1s)").compile(program, functions);
+    parse_list("(length l1s)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
