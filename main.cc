@@ -488,7 +488,6 @@ void Cell::compile(std::vector<std::string>& program,
                 program.push_back("PUSHS " + list[1].name);
                 program.push_back("CONS");
                 program.push_back("DEF");
-                program.push_back("PUSHS " + list[1].name);
             }
             else if (list[0].name == "func?")
             {

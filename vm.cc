@@ -65,11 +65,12 @@ struct VM
     std::vector<Cell> stack;
     std::vector<Cell> memory;
     Cell* env;
+    Cell nil;
     bool stop;
     int pc;
     int ticks;
     
-    VM() : env(nullptr), stop(false), pc(0), ticks(0) 
+    VM() : env(nullptr), nil(Cell::make_nil()), stop(false), pc(0), ticks(0) 
     { 
     	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
     	memory.push_back(Cell(Cell::Pair));
@@ -159,6 +160,7 @@ struct VM
            	memory.push_back(*env);
            	env->right = &memory.back(); 
            	env->left = &memory[memory.size() - 2];
+            stack.push_back(*xy.left);
         }
         else if (op == "LOADENV")
         {
@@ -174,16 +176,15 @@ struct VM
         }
         else if (op == "CONS")
         {
-            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-            {
-                // migrate left and right from stack to memory
-                Cell x = stack.back(); stack.pop_back();
-                Cell y = stack.back(); stack.pop_back();
-                memory.push_back(x); memory.push_back(y);
-            }
+            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");            
+            // migrate left and right from stack to memory
+            const Cell x = stack.back(); stack.pop_back();
+            const Cell y = stack.back(); stack.pop_back();
+            if (x.type != Cell::Nil) memory.push_back(x); 
+            if (y.type != Cell::Nil) memory.push_back(y); 
             const size_t memsize = memory.size();
-            Cell* right = &memory[memsize - 1];
-            Cell* left = &memory[memsize - 2];
+            Cell* right = y.type != Cell::Nil ? &memory[memsize - 1] : &nil;
+            Cell* left =  x.type != Cell::Nil ? (y.type != Cell::Nil ? &memory[memsize - 2] : &memory[memsize - 1]) : &nil;
             stack.push_back(Cell::make_pair(left, right));            
         }
         else if (op == "PUSHCAR")
