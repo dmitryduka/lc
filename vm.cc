@@ -128,14 +128,16 @@ struct VM
     std::vector<JitCell> jit_memory;
     size_t jit_stack_ptr;
     size_t jit_memory_ptr;
+    uint64_t jit_dbg;
     jit_context_t ctx;
     jit_function_t main;
     jit_value_t stack_addr;
     jit_value_t memory_addr;
     jit_value_t stack_ptr;
     jit_value_t memory_ptr;
+    jit_value_t dbg_ptr;
 
-    VM() : env(nullptr), nil(Cell::make_nil()), stop(false), pc(0), ticks(0), stack_historic_max_size(0), ctx(nullptr)
+    VM() : env(nullptr), nil(Cell::make_nil()), stop(false), pc(0), ticks(0), stack_historic_max_size(0), ctx(nullptr), jit_dbg(0)
     { 
     	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
     	memory.push_back(Cell(Pair));
@@ -177,6 +179,7 @@ struct VM
             if (stop) 
                 if (ctx)
                 {
+                    jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
                     jit_function_compile(main);
                     jit_int result = 0;
                     jit_function_apply(main, nullptr, &result);
@@ -568,18 +571,23 @@ struct VM
         memory_ptr_const.type = jit_type_void_ptr;
         memory_ptr_const.un.ptr_value = &jit_memory_ptr;
         memory_ptr = jit_value_create_constant(main, &memory_ptr_const);
+        // bind jit dbg var
+        jit_constant_t dbg_ptr_const;
+        dbg_ptr_const.type = jit_type_void_ptr;
+        dbg_ptr_const.un.ptr_value = &jit_dbg;
+        dbg_ptr = jit_value_create_constant(main, &dbg_ptr_const);
     }
 
     void step_jit(const std::string& instruction)
     {
         auto tokens = tokenize(instruction);
-        static jit_value_t c8 = jit_value_create_nint_constant(main, jit_type_int, 8);
-        static jit_value_t c2 = jit_value_create_nint_constant(main, jit_type_int, 2);
-        static jit_value_t c1 = jit_value_create_nint_constant(main, jit_type_int, 1);
+        static jit_value_t c8 = jit_value_create_nint_constant(main, jit_type_uint, 8);
+        static jit_value_t c2 = jit_value_create_nint_constant(main, jit_type_uint, 2);
+        static jit_value_t c1 = jit_value_create_nint_constant(main, jit_type_uint, 1);
         static jit_value_t cm1 = jit_value_create_nint_constant(main, jit_type_int, -1);
         static jit_value_t cm2 = jit_value_create_nint_constant(main, jit_type_int, -2);
-        static jit_value_t ctypemask = jit_value_create_long_constant(main, jit_type_long, 0xF000000000000000l);
-        static jit_value_t cdatamask = jit_value_create_long_constant(main, jit_type_long, 0x0FFFFFFFFFFFFFFFl);
+        static jit_value_t ctypemask = jit_value_create_long_constant(main, jit_type_ulong, 0xF000000000000000l);
+        static jit_value_t cdatamask = jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFl);
 
         if (tokens.empty()) return;
         const std::string op = tokens[0];
@@ -646,7 +654,7 @@ struct VM
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_long);
             jit_value_t v2 = jit_insn_load_relative(main, v2_addr, 0, jit_type_long);
             // migrate values to memory and modify mp
-            jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_int);
+            jit_value_t mp = jit_insn_convert(main, jit_insn_load_relative(main, memory_ptr, 0, jit_type_int), jit_type_ulong, 0);
             jit_value_t mp1 = jit_insn_add(main, mp, c1);
             jit_value_t v1m_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp, c8));
             jit_value_t v2m_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp1, c8));
@@ -655,8 +663,10 @@ struct VM
             jit_insn_store_relative(main, memory_ptr, 0, jit_insn_add(main, mp, c2));
             // create a pair and place it on the stack
             jit_value_t mp1s = jit_insn_shl(main, mp1, jit_value_create_nint_constant(main, jit_type_uint, 30));
-            jit_value_t pair = jit_insn_or(main, jit_insn_or(main, mp, mp1s), 
-                                                 jit_value_create_long_constant(main, jit_type_long, 0x1000000000000000l));
+            // modify sp
+            jit_value_t pair = jit_insn_or(main, jit_insn_or(main, mp1s, mp),
+                                                 jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
+            jit_insn_store_relative(main, dbg_ptr, 0, pair);
             // store
             jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8)), 0, pair);
             // modify sp
@@ -677,6 +687,7 @@ int main()
     vm.init_jit(); 
     vm.run(program);
     vm.debug();
+    cout << vm.jit_dbg << endl;
     vm.gc();
     return 0;    
 }
