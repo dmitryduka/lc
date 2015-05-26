@@ -4,16 +4,40 @@
 #include <sstream>
 #include <fstream>
 
+#include <jit/jit.h>
+#include <jit/jit-dump.h>
+
 using std::cout;
 using std::endl;
 
-const size_t STACK_SIZE  = 100000;
+const size_t STACK_SIZE  = 500;
 const size_t MEMORY_SIZE = 100000;
+
+enum CellType : uint8_t { Nil, Pair, Int, String, Lambda };
+
+std::string type_to_string(CellType type)
+{
+    if (type == Pair) return "Pair";
+    else if (type == Int) return "Int";
+    else if (type == String) return "String";
+    else if (type == Lambda) return "Lambda";
+    else if (type == Nil) return "Nil";
+    return "Unknown";
+}
+
+template<typename T>
+std::string data_to_string(const T& x)
+{
+    if (x.type == Pair) return "Pair";
+    else if (x.type == Int) return std::to_string(x.integer);
+    else if (x.type == String) return std::string(x.string);
+    else if (x.type == Lambda) return std::to_string(x.lambda_addr);
+    return "Unknown";
+}
 
 struct Cell
 {
-    enum Type : uint8_t { Nil, Pair, Int, String, Lambda };
-    Type type;
+    CellType type;
     char refcount;
     union {
         char      string[8];
@@ -28,24 +52,8 @@ struct Cell
         };
     };
 
-    Cell(Type x) : type(x), refcount(0), left(nullptr), right(nullptr) {}
-    std::string type_to_string()
-    {
-        if (type == Pair) return "Pair";
-        else if (type == Int) return "Int";
-        else if (type == String) return "String";
-        else if (type == Lambda) return "Lambda";
-        return "Unknown";
-    }
-    std::string data_to_string()
-    {
-        if (type == Pair) return "Pair";
-        else if (type == Int) return std::to_string(integer);
-        else if (type == String) return std::string(string);
-        else if (type == Lambda) return std::to_string(lambda_addr);
-        return "Unknown";
-    }
-    std::string pp() { return type_to_string() + ": " + data_to_string(); }
+    Cell(CellType x) : type(x), refcount(0), left(nullptr), right(nullptr) {}
+    std::string pp() { return type_to_string(type) + ": " + data_to_string(*this); }
 
     static Cell make_integer(int x) { Cell c(Int); c.integer = x; return c; }
     static Cell make_lambda(size_t x) { Cell c(Lambda); c.lambda_addr = x; return c; }
@@ -60,8 +68,53 @@ struct Cell
     static Cell make_pair(Cell* left, Cell* right) { Cell c(Pair); c.left = left; c.right = right; return c; }
 } __attribute__((packed));
 
+struct JitCell
+{
+    struct
+    {
+        union
+        {
+            struct {
+                uint64_t            integer : 60;
+                uint64_t            type : 4;
+            } __attribute__((packed));
+            struct {
+                char                string[7];
+                uint8_t             dummy_string : 8;
+            } __attribute__((packed));
+            struct {
+                uint32_t            left : 30;
+                uint32_t            right : 30;
+                uint32_t            dummy_pair : 4;
+            } __attribute__((packed));
+            struct {
+                uint32_t            lambda_addr : 32;
+                uint32_t            lambda_env : 28;
+                uint32_t            dummy_lambda : 4;
+            } __attribute__((packed));
+            uint64_t                as64;
+        };
+    } __attribute__((packed));
+    JitCell() : as64(0) { }
+    static JitCell make_integer(int x) { JitCell r; r.type = Int; r.integer = x; return r; }
+    static JitCell make_nil() { JitCell r; r.type = Nil; return r; }
+    static JitCell make_string(const std::string& x) { 
+        JitCell r;
+        r.type = String; 
+        for (int i = 0; i < sizeof(string) - 1; ++i)
+            if (x[i]) r.string[i] = x[i];
+            else break;
+        return r;
+    }
+    static JitCell make_lambda(int x) { JitCell r; r.type = Lambda; r.lambda_addr = x; return r; }
+    static JitCell make_pair(uint32_t x, uint32_t y) { JitCell r; r.type = Pair; r.left = x; r.right = y; return r; }
+
+    std::string pp() { return type_to_string(static_cast<CellType>(type)) + " : " + data_to_string(*this); }
+}  __attribute__((packed));
+
 struct VM
 {
+    // interpreter variables
     std::vector<Cell> stack;
     std::vector<Cell> memory;
     Cell* env;
@@ -69,12 +122,29 @@ struct VM
     bool stop;
     int pc;
     int ticks;
-    
-    VM() : env(nullptr), nil(Cell::make_nil()), stop(false), pc(0), ticks(0) 
+    int stack_historic_max_size;
+    // jit environment variables
+    std::vector<JitCell> jit_stack;
+    std::vector<JitCell> jit_memory;
+    size_t jit_stack_ptr;
+    size_t jit_memory_ptr;
+    jit_context_t ctx;
+    jit_function_t main;
+    jit_value_t stack_addr;
+    jit_value_t memory_addr;
+    jit_value_t stack_ptr;
+    jit_value_t memory_ptr;
+
+    VM() : env(nullptr), nil(Cell::make_nil()), stop(false), pc(0), ticks(0), stack_historic_max_size(0), ctx(nullptr)
     { 
     	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
-    	memory.push_back(Cell(Cell::Pair));
+    	memory.push_back(Cell(Pair));
     	env = &memory[memory.size() - 1];
+    }
+
+    ~VM()
+    {
+        if (ctx) jit_context_destroy(ctx);
     }
 
     int get_env_size() 
@@ -101,12 +171,21 @@ struct VM
         pc = 0;
         while (pc < program.size())
         {
-            step(program[pc]);
-            if (stop) break;
+            if(ctx) step_jit(program[pc]);
+            else step_interpret(program[pc]);
+            stack_historic_max_size = stack.size() > stack_historic_max_size ? stack.size() : stack_historic_max_size;
+            if (stop) 
+                if (ctx)
+                {
+                    jit_function_compile(main);
+                    jit_int result = 0;
+                    jit_function_apply(main, nullptr, &result);
+                }
+                else break;
         }
     }
 
-    void step(const std::string& instruction)
+    void step_interpret(const std::string& instruction)
     {
         bool dont_step_pc = false;
         auto tokens = tokenize(instruction);
@@ -125,7 +204,7 @@ struct VM
             if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
             Cell x = stack.back(); stack.pop_back();
             Cell y = stack.back(); stack.pop_back();
-            if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
+            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(y.integer + x.integer));
         }
         else if (op == "SUB")
@@ -133,7 +212,7 @@ struct VM
             if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
             Cell x = stack.back(); stack.pop_back();
             Cell y = stack.back(); stack.pop_back();
-            if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
+            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(y.integer - x.integer));
         }
         else if (op == "MUL")
@@ -141,7 +220,7 @@ struct VM
             if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
             Cell x = stack.back(); stack.pop_back();
             Cell y = stack.back(); stack.pop_back();
-            if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
+            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(y.integer * x.integer));
         }
         else if (op == "DIV")
@@ -149,7 +228,7 @@ struct VM
             if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
             Cell x = stack.back(); stack.pop_back();
             Cell y = stack.back(); stack.pop_back();
-            if (x.type != Cell::Int || y.type != Cell::Int) return panic(op, "Type mismatch");
+            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(y.integer / x.integer));
         }
         else if (op == "DEF")
@@ -180,20 +259,20 @@ struct VM
             // migrate left and right from stack to memory
             const Cell x = stack.back(); stack.pop_back();
             const Cell y = stack.back(); stack.pop_back();
-            if (x.type != Cell::Nil) memory.push_back(x); 
-            if (y.type != Cell::Nil) memory.push_back(y); 
+            if (x.type != Nil) memory.push_back(x); 
+            if (y.type != Nil) memory.push_back(y); 
             const size_t memsize = memory.size();
-            Cell* right = y.type != Cell::Nil ? &memory[memsize - 1] : &nil;
-            Cell* left =  x.type != Cell::Nil ? (y.type != Cell::Nil ? &memory[memsize - 2] : &memory[memsize - 1]) : &nil;
+            Cell* right = y.type != Nil ? &memory[memsize - 1] : &nil;
+            Cell* left =  x.type != Nil ? (y.type != Nil ? &memory[memsize - 2] : &memory[memsize - 1]) : &nil;
             stack.push_back(Cell::make_pair(left, right));            
         }
         else if (op == "PUSHCAR")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            //if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
-            if (stack.back().type == Cell::Int || 
-                stack.back().type == Cell::String ||
-                stack.back().type == Cell::Nil)                 
+            //if (stack.back().type != Pair) return panic(op, "Type mismatch");
+            if (stack.back().type == Int || 
+                stack.back().type == String ||
+                stack.back().type == Nil)                 
                 stack.push_back(stack.back());
             if (stack.back().left)
                 stack.push_back(*stack.back().left);
@@ -203,10 +282,10 @@ struct VM
         else if (op == "PUSHCDR")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            //if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
-            if (stack.back().type == Cell::Int || 
-                stack.back().type == Cell::String ||
-                stack.back().type == Cell::Nil)                 
+            //if (stack.back().type != Pair) return panic(op, "Type mismatch");
+            if (stack.back().type == Int || 
+                stack.back().type == String ||
+                stack.back().type == Nil)                 
                 stack.push_back(Cell::make_nil());
             if (stack.back().right)
                 stack.push_back(*stack.back().right);
@@ -219,20 +298,20 @@ struct VM
             Cell x = stack.back(); stack.pop_back();
             Cell y = stack.back(); stack.pop_back();
             if (x.type != y.type) return panic(op, "Type mismatch");
-            if (x.type == Cell::Int)
+            if (x.type == Int)
             {
                 if (x.integer == y.integer) stack.push_back(Cell::make_integer(1));
                 else stack.push_back(Cell::make_integer(0));
             }
-            else if (x.type == Cell::String)
+            else if (x.type == String)
             {
                 if (std::string(x.string) == std::string(y.string)) 
                     stack.push_back(Cell::make_integer(1));
                 else stack.push_back(Cell::make_integer(0));
             }
-            else if (x.type == Cell::Nil)
+            else if (x.type == Nil)
                 stack.push_back(Cell::make_integer(1));
-            else if (x.type == Cell::Lambda)
+            else if (x.type == Lambda)
             {
                 if (x.lambda_addr == y.lambda_addr) stack.push_back(Cell::make_integer(1));
                 else stack.push_back(Cell::make_integer(0));
@@ -245,7 +324,7 @@ struct VM
             Cell x = stack.back(); stack.pop_back();
             Cell y = stack.back(); stack.pop_back();
             if (x.type != y.type) return panic(op, "Type mismatch");
-            if (x.type == Cell::Int)
+            if (x.type == Int)
             {
                 if (y.integer < x.integer) stack.push_back(Cell::make_integer(1));
                 else stack.push_back(Cell::make_integer(0));
@@ -263,13 +342,13 @@ struct VM
         else if (op == "EQSI")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::String) return panic(op, "Type mismatch");
+            if (stack.back().type != String) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(tokens[1] == stack.back().string ? 1 : 0));            
         }
         else if (op == "RJNZ")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::Int) return panic(op, "Type mismatch");
+            if (stack.back().type != Int) return panic(op, "Type mismatch");
             if (stack.back().integer)
             {
                 pc += std::stoi(tokens[1]);
@@ -279,7 +358,7 @@ struct VM
         else if (op == "RJZ")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::Int) return panic(op, "Type mismatch");
+            if (stack.back().type != Int) return panic(op, "Type mismatch");
             if (!stack.back().integer)
             {
                 pc += std::stoi(tokens[1]);
@@ -321,7 +400,7 @@ struct VM
         else if (op == "CALL")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::Lambda) return panic(op, "Type mismatch");
+            if (stack.back().type != Lambda) return panic(op, "Type mismatch");
             int old_pc = pc;
             pc = stack.back().lambda_addr;
             Cell oldenv = *env;
@@ -349,13 +428,13 @@ struct VM
         else if (op == "CAR")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
+            if (stack.back().type != Pair) return panic(op, "Type mismatch");
             stack.back() = *stack.back().left;
         }
         else if (op == "CDR")
         {
             if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Cell::Pair) return panic(op, "Type mismatch");
+            if (stack.back().type != Pair) return panic(op, "Type mismatch");
             stack.back() = *stack.back().right;
         }
         else if (op == "SWAP")
@@ -371,21 +450,32 @@ struct VM
     
     void debug()
     {
-        cout << "VM info" << endl;
-        cout << "  PC: " << pc << endl;
-        cout << "  Ticks: " << ticks << endl;
-        cout << "  Stack size: " << stack.size() << endl;
-        cout << "  Stack contents: " << endl;
-        for (auto x : stack)
-            cout << "    " << x.pp() << endl;            
-        cout << "  Env size: " << get_env_size() << endl;
-        Cell* cur = env;
-        while (cur->left && cur->left->left)
+        if (ctx)
         {
-            cout << "    " << cur->left->left->pp() << " -> " << cur->left->right->pp() << endl;
-            cur = cur->right;
+            cout << "Disassembly:" << endl;
+            jit_dump_function(stdout, main, "main");
+            for (int i = 0; i < jit_stack_ptr; ++i)
+                cout << "    " << jit_stack[i].pp() << endl;
         }
-        cout << "  Memory size: " << memory.size() << endl;
+        else
+        {
+            cout << "VM info" << endl;
+            cout << "  PC: " << pc << endl;
+            cout << "  Ticks: " << ticks << endl;
+            cout << "  Stack historic max size: " << stack_historic_max_size << endl;
+            cout << "  Stack size: " << stack.size() << endl;
+            cout << "  Stack contents: " << endl;
+            for (auto x : stack)
+                cout << "    " << x.pp() << endl;            
+            cout << "  Env size: " << get_env_size() << endl;
+            Cell* cur = env;
+            while (cur->left && cur->left->left)
+            {
+                cout << "    " << cur->left->left->pp() << " -> " << cur->left->right->pp() << endl;
+                cur = cur->right;
+            }
+            cout << "  Memory size: " << memory.size() << endl;
+        }
     }
 
     void dump_graph()
@@ -396,13 +486,13 @@ struct VM
         {
             Cell* p = &x;
             std::string xtype;
-            if (x.type == Cell::Pair) xtype = p == env ? "ENV_P_" : "P_";
-            else if (x.type == Cell::Lambda) xtype = "L_";
-            else if (x.type == Cell::Int) xtype = "I_" + std::to_string(x.integer) + "_";
-            else if (x.type == Cell::Nil) xtype = "N_";
-            else if (x.type == Cell::String) xtype = "S_" + std::string(x.string) + "_";
+            if (x.type == Pair) xtype = p == env ? "ENV_P_" : "P_";
+            else if (x.type == Lambda) xtype = "L_";
+            else if (x.type == Int) xtype = "I_" + std::to_string(x.integer) + "_";
+            else if (x.type == Nil) xtype = "N_";
+            else if (x.type == String) xtype = "S_" + std::string(x.string) + "_";
             for (auto& y : memory)
-                if (y.type == Cell::Pair)
+                if (y.type == Pair)
                     if (y.left == p || y.right == p) 
                     { 
                         ofs << "edge [style=solid,color=black];" << endl;
@@ -410,14 +500,14 @@ struct VM
                         if (!y.refcount) ofs << (&y == env ? "ENV_P_" : "P_") << &y << " [style=filled,color=gray];" << endl;
                         if (!p->refcount) ofs << xtype << p << " [style=filled,color=gray];" << endl;
                     }
-                    else if (x.type == Cell::Lambda && x.lambda_env == &y)
+                    else if (x.type == Lambda && x.lambda_env == &y)
                     {
                         ofs << "edge [style=dashed,color=red];" << endl;
                         ofs << "L_" << p << " -> P_" << &y  << endl;                         
                         if (!y.refcount) ofs << "P_" << &y << " [style=filled,color=gray];" << endl;
                         if (!p->refcount) ofs << "L_" << p << " [style=filled,color=gray];" << endl;
                     }
-                else if (y.type == Cell::Lambda)
+                else if (y.type == Lambda)
                     if (y.lambda_env == p)
                     { 
                         ofs << "edge [style=dashed,color=red];" << endl;
@@ -434,8 +524,8 @@ struct VM
         if (!root) return;
         if (root->refcount) return;
         root->refcount++;
-        if (root->type == Cell::Lambda) return gc_recursive(root->lambda_env);
-        if (root->type == Cell::Pair) { gc_recursive(root->left); gc_recursive(root->right); }
+        if (root->type == Lambda) return gc_recursive(root->lambda_env);
+        if (root->type == Pair) { gc_recursive(root->left); gc_recursive(root->right); }
     }
 
     void gc()
@@ -444,27 +534,147 @@ struct VM
         cout << "Garbage collecting: " << memory.size() << " cells" << endl;
         gc_recursive(env->left);
         gc_recursive(env->right);
-        std::ofstream ofs("stat.txt");
-        for (auto& x : memory)
-            if (x.refcount)
-            {
-                used += 1;
-                ofs << "1" << endl;
-            }
-            else ofs << "0" << endl;                
+        for (auto& x : memory) if (x.refcount) used += 1;
         cout << "  Found orphaned cells: " << memory.size() - used << endl;
         cout << "  Found used cells: " << used << endl;
+    }
+
+    void init_jit()
+    {
+        jit_stack.resize(STACK_SIZE);
+        jit_memory.resize(MEMORY_SIZE);
+        jit_stack_ptr = 0;
+        jit_memory_ptr = 0;
+        ctx = jit_context_create();
+        jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, nullptr, 0, 1);
+        main = jit_function_create(ctx, signature);
+        // bind jit stack
+        jit_constant_t stack_addr_const;
+        stack_addr_const.type = jit_type_void_ptr;
+        stack_addr_const.un.ptr_value = &jit_stack[0];
+        stack_addr = jit_value_create_constant(main, &stack_addr_const);
+        // bind jit memory
+        jit_constant_t memory_addr_const;
+        memory_addr_const.type = jit_type_void_ptr;
+        memory_addr_const.un.ptr_value = &jit_memory[0];
+        memory_addr = jit_value_create_constant(main, &memory_addr_const);
+        // bind jit stack pointer
+        jit_constant_t stack_ptr_const;
+        stack_ptr_const.type = jit_type_void_ptr;
+        stack_ptr_const.un.ptr_value = &jit_stack_ptr;
+        stack_ptr = jit_value_create_constant(main, &stack_ptr_const);
+        // bind jit memory pointer
+        jit_constant_t memory_ptr_const;
+        memory_ptr_const.type = jit_type_void_ptr;
+        memory_ptr_const.un.ptr_value = &jit_memory_ptr;
+        memory_ptr = jit_value_create_constant(main, &memory_ptr_const);
+    }
+
+    void step_jit(const std::string& instruction)
+    {
+        auto tokens = tokenize(instruction);
+        static jit_value_t c8 = jit_value_create_nint_constant(main, jit_type_int, 8);
+        static jit_value_t c2 = jit_value_create_nint_constant(main, jit_type_int, 2);
+        static jit_value_t c1 = jit_value_create_nint_constant(main, jit_type_int, 1);
+        static jit_value_t cm1 = jit_value_create_nint_constant(main, jit_type_int, -1);
+        static jit_value_t cm2 = jit_value_create_nint_constant(main, jit_type_int, -2);
+        static jit_value_t ctypemask = jit_value_create_long_constant(main, jit_type_long, 0xF000000000000000l);
+        static jit_value_t cdatamask = jit_value_create_long_constant(main, jit_type_long, 0x0FFFFFFFFFFFFFFFl);
+
+        if (tokens.empty()) return;
+        const std::string op = tokens[0];
+        if (op == "FIN") stop = true;
+        else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
+        {
+            // increment sp
+            JitCell cell;
+            if (op == "PUSHCI") cell = JitCell::make_integer(std::stoi(tokens[1]));
+            else if(op == "PUSHNIL") cell = JitCell::make_nil();
+            else if(op == "PUSHS") cell = JitCell::make_string(tokens[1]);
+            else if(op == "PUSHL") cell = JitCell::make_lambda(std::stoi(tokens[1])); // TODO
+            // current sp
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            // stack_addr + sp
+            jit_value_t stack_addr_offsetted = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            // store
+            jit_insn_store_relative(main, stack_addr_offsetted, 0, jit_value_create_long_constant(main, jit_type_long, cell.as64));
+            // modify sp
+            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+        }
+        else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "EQ" || op == "LT")
+        {
+            // current sp
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp_1 = jit_insn_add(main, sp, cm1);
+            jit_value_t sp_2 = jit_insn_add(main, sp, cm2);
+            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_1, c8));
+            jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8));
+            // load sp-1 snd sp-2 values, save v1 type and clear type bits on both values
+            jit_value_t v1t = jit_insn_load_relative(main, v1_addr, 0, jit_type_long);
+            jit_value_t t1 = jit_insn_and(main, v1t, ctypemask);
+            jit_value_t v1 = jit_insn_and(main, v1t, cdatamask);
+            jit_value_t v2 = jit_insn_and(main, jit_insn_load_relative(main, v2_addr, 0, jit_type_long), cdatamask);
+            // add them as 64 bit values
+            jit_value_t r;
+            if (op == "ADD") r = jit_insn_add(main, v1, v2);
+            else if (op == "SUB") r = jit_insn_add(main, jit_insn_neg(main, v1), v2);
+            else if (op == "MUL") r = jit_insn_mul(main, v1, v2);
+            else if (op == "DIV") r = jit_insn_div(main, v2, v1);
+            else if (op == "EQ")  r = jit_insn_eq(main, v1, v2);
+            else if (op == "LT")  r = jit_insn_lt(main, v2, v1); // TODO: check this
+            // and fix type in case result occupies more than 60 bits
+            jit_value_t rf = jit_insn_or(main, jit_insn_and(main, r, cdatamask), t1);
+            // store value on top of the stack
+            jit_insn_store_relative(main, v2_addr, 0, rf);
+            // modify sp
+            jit_insn_store_relative(main, stack_ptr, 0, sp_1);
+        }
+        else if (op == "POP")
+        {
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+        }
+        else if (op == "CONS")
+        {
+            // current sp
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp_1 = jit_insn_add(main, sp, cm1);
+            jit_value_t sp_2 = jit_insn_add(main, sp, cm2);
+            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_1, c8));
+            jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8));
+            // load sp-1 snd sp-2 values, save v1 type and clear type bits on both values
+            jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_long);
+            jit_value_t v2 = jit_insn_load_relative(main, v2_addr, 0, jit_type_long);
+            // migrate values to memory and modify mp
+            jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_int);
+            jit_value_t mp1 = jit_insn_add(main, mp, c1);
+            jit_value_t v1m_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp, c8));
+            jit_value_t v2m_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp1, c8));
+            jit_insn_store_relative(main, v1m_addr, 0, v1);
+            jit_insn_store_relative(main, v2m_addr, 0, v2);
+            jit_insn_store_relative(main, memory_ptr, 0, jit_insn_add(main, mp, c2));
+            // create a pair and place it on the stack
+            jit_value_t mp1s = jit_insn_shl(main, mp1, jit_value_create_nint_constant(main, jit_type_uint, 30));
+            jit_value_t pair = jit_insn_or(main, jit_insn_or(main, mp, mp1s), 
+                                                 jit_value_create_long_constant(main, jit_type_long, 0x1000000000000000l));
+            // store
+            jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8)), 0, pair);
+            // modify sp
+            jit_insn_store_relative(main, stack_ptr, 0, sp_1);
+        }
+        pc += 1;
     }
 };
 
 
 int main()
-{
+{    
     std::string line;
     std::vector<std::string> program;
     while (std::getline(std::cin, line))
        program.push_back(line);
-    VM vm;   
+    VM vm;
+    vm.init_jit(); 
     vm.run(program);
     vm.debug();
     vm.gc();
