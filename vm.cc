@@ -126,18 +126,28 @@ struct VM
     // jit environment variables
     std::vector<JitCell> jit_stack;
     std::vector<JitCell> jit_memory;
+    std::vector<jit_label_t> jit_jump_table;
+    JitCell jit_env;
     size_t jit_stack_ptr;
     size_t jit_memory_ptr;
     uint64_t jit_dbg;
     jit_context_t ctx;
     jit_function_t main;
     jit_value_t stack_addr;
-    jit_value_t memory_addr;
     jit_value_t stack_ptr;
+    jit_value_t memory_addr;
     jit_value_t memory_ptr;
+    jit_value_t env_ptr;
     jit_value_t dbg_ptr;
 
-    VM() : env(nullptr), nil(Cell::make_nil()), stop(false), pc(0), ticks(0), stack_historic_max_size(0), ctx(nullptr), jit_dbg(0)
+    VM() : env(nullptr), 
+            nil(Cell::make_nil()), 
+            stop(false), 
+            pc(0), 
+            ticks(0), 
+            stack_historic_max_size(0), 
+            ctx(nullptr), 
+            jit_dbg(0)
     { 
     	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
     	memory.push_back(Cell(Pair));
@@ -171,6 +181,7 @@ struct VM
     void run(const std::vector<std::string>& program)
     {
         pc = 0;
+        if (ctx) prepare_jump_tables(program);
         while (pc < program.size())
         {
             if(ctx) step_jit(program[pc]);
@@ -455,10 +466,15 @@ struct VM
     {
         if (ctx)
         {
+            cout << "Jump table size: " << jit_jump_table.size() << endl;
             cout << "Disassembly:" << endl;
             jit_dump_function(stdout, main, "main");
-            for (int i = 0; i < jit_stack_ptr; ++i)
+            cout << "Stack:" << endl;
+            for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
+            cout << "Memory:" << endl;            
+            for (int i = jit_memory_ptr + 1; i >= 0; --i)
+                cout << "    " << jit_memory[i].pp() << endl;
         }
         else
         {
@@ -559,7 +575,7 @@ struct VM
         // bind jit memory
         jit_constant_t memory_addr_const;
         memory_addr_const.type = jit_type_void_ptr;
-        memory_addr_const.un.ptr_value = &jit_memory[0];
+        memory_addr_const.un.ptr_value = &jit_memory[2]; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
         memory_addr = jit_value_create_constant(main, &memory_addr_const);
         // bind jit stack pointer
         jit_constant_t stack_ptr_const;
@@ -576,6 +592,26 @@ struct VM
         dbg_ptr_const.type = jit_type_void_ptr;
         dbg_ptr_const.un.ptr_value = &jit_dbg;
         dbg_ptr = jit_value_create_constant(main, &dbg_ptr_const);
+        // bind jit env var
+        jit_constant_t env_ptr_const;
+        env_ptr_const.type = jit_type_void_ptr;
+        env_ptr_const.un.ptr_value = &jit_memory[1]; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
+        env_ptr = jit_value_create_constant(main, &env_ptr_const);
+        jit_insn_store_relative(main, env_ptr, 0, jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
+    }
+
+    void prepare_jump_tables(const std::vector<std::string>& program)
+    {
+        size_t jumps = 0;
+        for (const auto& instr : program)
+        {
+            auto x = tokenize(instr)[0];
+            if (x == "CALL" || x == "RET" || 
+                x == "RJMP" || x == "JMP" || 
+                x == "RJNZ" || x == "RJNZ")
+                jumps += 1;
+        }
+        jit_jump_table.resize(jumps);
     }
 
     void step_jit(const std::string& instruction)
@@ -666,11 +702,54 @@ struct VM
             // modify sp
             jit_value_t pair = jit_insn_or(main, jit_insn_or(main, mp1s, mp),
                                                  jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
-            jit_insn_store_relative(main, dbg_ptr, 0, pair);
             // store
             jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8)), 0, pair);
             // modify sp
             jit_insn_store_relative(main, stack_ptr, 0, sp_1);
+        }
+        else if (op == "SWAP")
+        {
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp_v1 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -1));
+            jit_value_t sp_v2 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 2)));
+            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
+            jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v2, c8));
+            // load values
+            jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
+            jit_value_t v2 = jit_insn_load_relative(main, v2_addr, 0, jit_type_ulong);
+            // store them in different order
+            jit_insn_store_relative(main, v1_addr, 0, v2);            
+            jit_insn_store_relative(main, v2_addr, 0, v1);
+        }
+        else if (op == "DEF")
+        {
+        }
+        else if (op == "PUSHCAR" || op == "PUSHCDR" || op == "CAR" || op == "CDR")
+        {
+            bool car = (op == "PUSHCAR" || op == "CAR") ? true : false;
+            bool remove_from_stack = (op == "CAR" || op == "CDR") ? true : false;
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp1 = jit_insn_add(main, sp, cm1);
+            jit_value_t pair_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            // load pair from stack
+            jit_value_t pair = jit_insn_load_relative(main, pair_addr, 0, jit_type_ulong);
+            // read 'left' part of a cell
+            jit_value_t mask;
+            if (car) mask = jit_value_create_long_constant(main, jit_type_ulong, 0x000000003FFFFFFFull);
+            else mask = jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFC0000000ull);
+            jit_value_t cell_addr = jit_insn_and(main, pair, mask);
+            if (!car) cell_addr = jit_insn_shr(main, cell_addr, jit_value_create_nint_constant(main, jit_type_int, 30));
+            // load left cell from memory
+            jit_value_t result_addr = jit_insn_convert(main, 
+                                                        jit_insn_add(main, 
+                                                                        memory_addr, 
+                                                                        jit_insn_mul(main, cell_addr, c8)), jit_type_uint, 0);
+            if (remove_from_stack) sp = sp1;
+            jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
+                                          jit_insn_load_relative(main, result_addr, 0, jit_type_ulong));
+            // modify sp
+            if (remove_from_stack) jit_insn_store_relative(main, stack_ptr, 0, sp1);
+            else jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
         pc += 1;
     }
@@ -687,7 +766,6 @@ int main()
     vm.init_jit(); 
     vm.run(program);
     vm.debug();
-    cout << vm.jit_dbg << endl;
     vm.gc();
     return 0;    
 }

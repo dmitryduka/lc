@@ -784,6 +784,7 @@ int main()
     // parse_list("(car l1s)").compile(program, functions);
     // parse_list("(length l1s)").compile(program, functions);
     //parse_list("(factorl 10)").compile(program, functions);
+    parse_list("(square 10)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
