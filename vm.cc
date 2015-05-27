@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <set>
 #include <cstdint>
 #include <sstream>
 #include <fstream>
@@ -127,9 +128,11 @@ struct VM
     std::vector<JitCell> jit_stack;
     std::vector<JitCell> jit_memory;
     std::vector<jit_label_t> jit_jump_table;
+    std::set<size_t> jumptable;
     JitCell jit_env;
     size_t jit_stack_ptr;
     size_t jit_memory_ptr;
+    size_t jit_jump_table_current_index;
     uint64_t jit_dbg;
     jit_context_t ctx;
     jit_function_t main;
@@ -146,7 +149,8 @@ struct VM
             pc(0), 
             ticks(0), 
             stack_historic_max_size(0), 
-            ctx(nullptr), 
+            ctx(nullptr),
+            jit_jump_table_current_index(0),
             jit_dbg(0)
     { 
     	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
@@ -602,16 +606,23 @@ struct VM
 
     void prepare_jump_tables(const std::vector<std::string>& program)
     {
-        size_t jumps = 0;
+        size_t jumps = 0, local_pc = 0;
         for (const auto& instr : program)
         {
-            auto x = tokenize(instr)[0];
-            if (x == "CALL" || x == "RET" || 
+            auto tokens = tokenize(instr);
+            const auto& x = tokens[0];
+            if (x == "CALL" || 
                 x == "RJMP" || x == "JMP" || 
-                x == "RJNZ" || x == "RJNZ")
+                x == "RJNZ" || x == "RJZ")
+            {
                 jumps += 1;
+                if (x == "CALL") jumptable.insert(local_pc + 1);
+                else jumptable.insert(local_pc + std::stoi(tokens[1]));
+            }
+            local_pc += 1;
         }
         jit_jump_table.resize(jumps);
+        for (auto& x : jit_jump_table) x = jit_label_undefined;
     }
 
     void step_jit(const std::string& instruction)
@@ -624,6 +635,10 @@ struct VM
         static jit_value_t cm2 = jit_value_create_nint_constant(main, jit_type_int, -2);
         static jit_value_t ctypemask = jit_value_create_long_constant(main, jit_type_ulong, 0xF000000000000000l);
         static jit_value_t cdatamask = jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFl);
+
+        // insert label in case this is the target of a jump or instruction next to a call
+        if (jumptable.count(pc))
+            jit_insn_label(main, &jit_jump_table[jit_jump_table_current_index++]);
 
         if (tokens.empty()) return;
         const std::string op = tokens[0];
@@ -745,11 +760,26 @@ struct VM
                                                                         memory_addr, 
                                                                         jit_insn_mul(main, cell_addr, c8)), jit_type_uint, 0);
             if (remove_from_stack) sp = sp1;
+            // store it in the stack
             jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
                                           jit_insn_load_relative(main, result_addr, 0, jit_type_ulong));
             // modify sp
             if (remove_from_stack) jit_insn_store_relative(main, stack_ptr, 0, sp1);
             else jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+        }
+        else if (op == "LOADENV")
+        {
+            
+        }
+        else if (op == "STOREENV")
+        {
+            
+        }
+        else if (op == "CALL" || op == "RET")
+        {
+            // TODO: get IP from stack
+            // branch to 'function'
+            jit_insn_jump_table(main, ip, &jit_jump_table[0], jit_jump_table.size());
         }
         pc += 1;
     }
