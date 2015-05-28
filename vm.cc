@@ -798,7 +798,10 @@ struct VM
         }
         else if (op == "RJMP" || op == "RJNZ" || op == "RJZ")
         {
-            jit_insn_jump_table(main, jit_value_create_nint_constant(main, jit_type_uint, jit_jump_map[pc]), 
+            // TODO: check condition
+
+            // jump
+            jit_insn_jump_table(main, jit_value_create_nint_constant(main, jit_type_uint, jit_jump_map[pc + std::stoi(tokens[1])]), 
                                     &jit_jump_table[0], jit_jump_table.size());            
         }
         pc += 1;
