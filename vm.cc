@@ -1,6 +1,6 @@
 #include <iostream>
 #include <vector>
-#include <set>
+#include <map>
 #include <cstdint>
 #include <sstream>
 #include <fstream>
@@ -14,7 +14,7 @@ using std::endl;
 const size_t STACK_SIZE  = 500;
 const size_t MEMORY_SIZE = 100000;
 
-enum CellType : uint8_t { Nil, Pair, Int, String, Lambda };
+enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer };
 
 std::string type_to_string(CellType type)
 {
@@ -127,21 +127,23 @@ struct VM
     // jit environment variables
     std::vector<JitCell> jit_stack;
     std::vector<JitCell> jit_memory;
-    std::vector<jit_label_t> jit_jump_table;
-    std::set<size_t> jumptable;
-    JitCell jit_env;
     size_t jit_stack_ptr;
     size_t jit_memory_ptr;
+    std::map<size_t, size_t> jit_jump_map;
+    std::vector<jit_label_t> jit_jump_table;
     size_t jit_jump_table_current_index;
     uint64_t jit_dbg;
-    jit_context_t ctx;
-    jit_function_t main;
-    jit_value_t stack_addr;
-    jit_value_t stack_ptr;
-    jit_value_t memory_addr;
-    jit_value_t memory_ptr;
-    jit_value_t env_ptr;
-    jit_value_t dbg_ptr;
+    struct
+    {
+        jit_context_t ctx;
+        jit_function_t main;
+        jit_value_t stack_addr;
+        jit_value_t stack_ptr;
+        jit_value_t memory_addr;
+        jit_value_t memory_ptr;
+        jit_value_t env_ptr;
+        jit_value_t dbg_ptr;
+    };
 
     VM() : env(nullptr), 
             nil(Cell::make_nil()), 
@@ -185,7 +187,7 @@ struct VM
     void run(const std::vector<std::string>& program)
     {
         pc = 0;
-        if (ctx) prepare_jump_tables(program);
+        if (ctx) prepare_jump_table(program);
         while (pc < program.size())
         {
             if(ctx) step_jit(program[pc]);
@@ -471,6 +473,8 @@ struct VM
         if (ctx)
         {
             cout << "Jump table size: " << jit_jump_table.size() << endl;
+            for (auto& x : jit_jump_map)
+                cout << "  " << x.first << " - " << x.second << endl;
             cout << "Disassembly:" << endl;
             jit_dump_function(stdout, main, "main");
             cout << "Stack:" << endl;
@@ -604,24 +608,26 @@ struct VM
         jit_insn_store_relative(main, env_ptr, 0, jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
     }
 
-    void prepare_jump_tables(const std::vector<std::string>& program)
+    void prepare_jump_table(const std::vector<std::string>& program)
     {
         size_t jumps = 0, local_pc = 0;
         for (const auto& instr : program)
         {
             auto tokens = tokenize(instr);
             const auto& x = tokens[0];
-            if (x == "CALL" || 
-                x == "RJMP" || x == "JMP" || 
-                x == "RJNZ" || x == "RJZ")
+            if (x == "CALL" || x == "RET" || x == "FIN" ||
+                x == "RJMP" || x == "JMP" || x == "RJNZ" || x == "RJZ")
             {
-                jumps += 1;
-                if (x == "CALL") jumptable.insert(local_pc + 1);
-                else jumptable.insert(local_pc + std::stoi(tokens[1]));
-            }
+                int jpc = 0;
+                if (x == "CALL" || x == "RET" || x == "FIN") jpc = local_pc + 1;
+                else jpc = local_pc + std::stoi(tokens[1]);
+
+                if (jpc < program.size() && !jit_jump_map.count(jpc)) 
+                    jit_jump_map[jpc] = jumps++;
+             }
             local_pc += 1;
         }
-        jit_jump_table.resize(jumps);
+        jit_jump_table.resize(jit_jump_map.size());
         for (auto& x : jit_jump_table) x = jit_label_undefined;
     }
 
@@ -637,8 +643,8 @@ struct VM
         static jit_value_t cdatamask = jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFl);
 
         // insert label in case this is the target of a jump or instruction next to a call
-        if (jumptable.count(pc))
-            jit_insn_label(main, &jit_jump_table[jit_jump_table_current_index++]);
+        if (jit_jump_map.count(pc))
+            jit_insn_label(main, &jit_jump_table[jit_jump_map[pc]]);
 
         if (tokens.empty()) return;
         const std::string op = tokens[0];
@@ -684,9 +690,12 @@ struct VM
             // and fix type in case result occupies more than 60 bits
             jit_value_t rf = jit_insn_or(main, jit_insn_and(main, r, cdatamask), t1);
             // store value on top of the stack
-            jit_insn_store_relative(main, v2_addr, 0, rf);
+             // EQ, LT operations doesn't pop operands from stack
+            if (op == "EQ" || op == "LT") v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+                jit_insn_store_relative(main, v2_addr, 0, rf);
             // modify sp
-            jit_insn_store_relative(main, stack_ptr, 0, sp_1);
+            if (op == "EQ" || op == "LT") sp_1 = jit_insn_add(main, sp, c1);
+                jit_insn_store_relative(main, stack_ptr, 0, sp_1);
         }
         else if (op == "POP")
         {
@@ -777,9 +786,20 @@ struct VM
         }
         else if (op == "CALL" || op == "RET")
         {
-            // TODO: get IP from stack
+            // load IP from stack            
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp1 = jit_insn_add(main, sp, cm1);
+            jit_value_t ip_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t ip = jit_insn_load_relative(main, ip_addr, 0, jit_type_ulong);
+            // TODO: store PC and ENV
+            //jit_insn_store_relative(main, stack_ptr, 0, sp1);
             // branch to 'function'
             jit_insn_jump_table(main, ip, &jit_jump_table[0], jit_jump_table.size());
+        }
+        else if (op == "RJMP" || op == "RJNZ" || op == "RJZ")
+        {
+            jit_insn_jump_table(main, jit_value_create_nint_constant(main, jit_type_uint, jit_jump_map[pc]), 
+                                    &jit_jump_table[0], jit_jump_table.size());            
         }
         pc += 1;
     }
