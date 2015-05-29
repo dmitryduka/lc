@@ -201,15 +201,14 @@ struct VM
             if(ctx) step_jit(program[pc]);
             else step_interpret(program[pc]);
             stack_historic_max_size = stack.size() > stack_historic_max_size ? stack.size() : stack_historic_max_size;
-            if (stop) 
-                if (ctx)
-                {
-                    jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
-                    jit_function_compile(main);
-                    jit_int result = 0;
-                    jit_function_apply(main, nullptr, &result);
-                }
-                else break;
+            if (stop) break;
+        }
+        if (ctx)
+        {
+            jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
+            jit_function_compile(main);
+            jit_int result = 0;
+            jit_function_apply(main, nullptr, &result);
         }
     }
 
@@ -659,7 +658,8 @@ struct VM
 
         if (tokens.empty()) return;
         const std::string op = tokens[0];
-        if (op == "FIN") stop = true;
+        
+        if (op == "FIN") {}
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
             // increment sp
@@ -668,7 +668,13 @@ struct VM
             if (op == "PUSHCI") cell = JitCell::make_integer(std::stoi(tokens[1]));
             else if(op == "PUSHNIL") cell = JitCell::make_nil();
             else if(op == "PUSHS") cell = JitCell::make_string(tokens[1]);
-            else if(op == "PUSHL") cell = JitCell::make_lambda(jit_jump_map[std::stoi(tokens[1])], 0);
+            else if(op == "PUSHL") 
+            {
+                uint32_t lambda_start = std::stoi(tokens[1]);
+                if (jit_jump_map.count(lambda_start))
+                    cell = JitCell::make_lambda(jit_jump_map[lambda_start], 0);
+                else panic(op, "Lambda has no entry in the jump table");
+            }
 
             cellval = jit_value_create_long_constant(main, jit_type_long, cell.as64);
 
@@ -766,6 +772,17 @@ struct VM
             jit_insn_store_relative(main, v1_addr, 0, v2);            
             jit_insn_store_relative(main, v2_addr, 0, v1);
         }
+        else if (op == "PUSHFS")
+        {
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp_v1 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 1)));
+            jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
+            jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
+            jit_insn_store_relative(main, sp_addr, 0, v1);
+            // modify sp
+            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+        }
         else if (op == "DEF")
         {
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
@@ -845,7 +862,7 @@ struct VM
         }
         else if (op == "LOADENV")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
             jit_value_t ep = jit_insn_load_relative(main, env_ptr, 0, jit_type_uint);
             jit_value_t ep_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, ep, c8));
@@ -864,6 +881,9 @@ struct VM
             jit_insn_store_relative(main, envmp, 0, jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong));
             jit_insn_store_relative(main, stack_ptr, 0, sp1);
             jit_insn_store_relative(main, memory_ptr, 0, jit_insn_add(main, mp, c1));
+        }
+        else if (op == "NOP")
+        {
         }
         else if (op == "CALL")
         {
