@@ -734,7 +734,7 @@ struct VM
         else if (op == "SWAP")
         {
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
-            jit_value_t sp_v1 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -1));
+            jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_v2 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 2)));
             jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
             jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v2, c8));
@@ -747,6 +747,24 @@ struct VM
         }
         else if (op == "DEF")
         {
+        }
+        else if (op == "EQSI")
+        {
+            JitCell cell = JitCell::make_string(tokens[1]);
+            // load a value from the top of the stack
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
+            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
+            jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
+            // check cells are equal
+            jit_value_t v1eq = jit_insn_eq(main, v1, jit_value_create_long_constant(main, jit_type_ulong, cell.as64));
+            // set type to Int
+            jit_value_t v1eqt = jit_insn_or(main, v1eq, jit_value_create_long_constant(main, jit_type_ulong, 0x2000000000000000ull));
+            jit_value_t result_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            // store eq result
+            jit_insn_store_relative(main, result_addr, 0, v1eqt);
+            // modify sp
+            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
         else if (op == "PUSHCAR" || op == "PUSHCDR" || op == "CAR" || op == "CDR")
         {
@@ -796,9 +814,11 @@ struct VM
             // load IP from stack            
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
-            jit_value_t ip_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
-            jit_value_t ip = jit_insn_load_relative(main, ip_addr, 0, jit_type_ulong);
-            // TODO: store PC and ENV
+            jit_value_t lambda_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t lambda = jit_insn_load_relative(main, lambda_addr, 0, jit_type_ulong);
+            // TODO: extract jump_map index from lambda
+            jit_value_t ip;
+            // TODO: store jump_map index and ENV on stack
             //jit_insn_store_relative(main, stack_ptr, 0, sp1);
             // branch to 'function'
             jit_insn_jump_table(main, ip, &jit_jump_table[0], jit_jump_table.size());
