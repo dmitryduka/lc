@@ -778,11 +778,18 @@ struct VM
         }
         else if (op == "LOADENV")
         {
-            
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            jit_insn_store_relative(main, sp_addr, 0, jit_insn_load_relative(main, env_ptr, 0, jit_type_ulong));   
+            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));   
         }
         else if (op == "STOREENV")
         {
-            
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp1 = jit_insn_add(main, sp, cm1);
+            jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_insn_store_relative(main, env_ptr, 0, jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong));
+            jit_insn_store_relative(main, stack_ptr, 0, sp1);   
         }
         else if (op == "CALL" || op == "RET")
         {
