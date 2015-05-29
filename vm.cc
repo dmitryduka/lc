@@ -785,10 +785,9 @@ struct VM
             // modify mp
             jit_insn_store_relative(main, memory_ptr, 0, jit_insn_add(main, mp, c2));
             // modify current env
-            env = jit_insn_and(main, env, mp);
             jit_value_t right = jit_insn_shl(main, jit_insn_convert(main, jit_insn_add(main, mp, c1), jit_type_ulong, 0),
                                                     jit_value_create_nint_constant(main, jit_type_uint, 30));
-            env = jit_insn_or(main, env, right);
+            env = jit_insn_or(main, mp, right);
             env = jit_insn_or(main, env, jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
             jit_insn_store_relative(main, ep_addr, 0, env);
             // load left cell (a string likely) and store it on the stack instead of the defpair 
@@ -834,13 +833,15 @@ struct VM
                                                         jit_insn_add(main, 
                                                                         memory_addr, 
                                                                         jit_insn_mul(main, cell_addr, c8)), jit_type_uint, 0);
-            if (remove_from_stack) sp = sp1;
-            // store it in the stack
-            jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
+            // store it on the stack
+            if (remove_from_stack)
+                jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8)), 0, 
+                                          jit_insn_load_relative(main, result_addr, 0, jit_type_ulong));
+            else
+                jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
                                           jit_insn_load_relative(main, result_addr, 0, jit_type_ulong));
             // modify sp
-            if (remove_from_stack) jit_insn_store_relative(main, stack_ptr, 0, sp1);
-            else jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+            if (!remove_from_stack) jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
         else if (op == "LOADENV")
         {
