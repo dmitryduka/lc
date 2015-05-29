@@ -879,14 +879,30 @@ struct VM
             // push ip
             jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
                                           jit_value_create_long_constant(main, jit_type_ulong, jit_jump_map[pc + 1]));
+            // load lambda's env
+            jit_insn_store_relative(main, env_ptr, 0, lambda_env);
             // we popped lambda object and pushed env + pc
             jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
             // branch to 'function'
             jit_insn_jump_table(main, lambda_addr, &jit_jump_table[0], jit_jump_table.size());
         }
-        // else if (op == "RET")
-        // {
-        // }
+        else if (op == "RET")
+        {
+            // at this point pc and env should be at the top of the stack, otherwise boom
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp1 = jit_insn_add(main, sp, cm1);
+            jit_value_t sp2 = jit_insn_add(main, sp, cm2);
+            // load pc
+            jit_value_t pc_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t pc = jit_insn_convert(main, jit_insn_load_relative(main, pc_addr, 0, jit_type_ulong), jit_type_uint, 0);
+            // load env
+            jit_value_t env_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp2, c8));
+            jit_value_t env = jit_insn_load_relative(main, env_addr, 0, jit_type_ulong);
+            // set env
+            jit_insn_store_relative(main, env_ptr, 0, jit_insn_convert(main, env, jit_type_uint, 0));
+            // branch back
+            jit_insn_jump_table(main, pc, &jit_jump_table[0], jit_jump_table.size());
+        }
         else if (op == "RJMP" || op == "RJNZ" || op == "RJZ")
         {
             jit_label_t if_yes = jit_label_undefined, if_no = jit_label_undefined;
