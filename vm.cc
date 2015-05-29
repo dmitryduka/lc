@@ -476,7 +476,7 @@ struct VM
             for (auto& x : jit_jump_map)
                 cout << "  " << x.first << " - " << x.second << endl;
             cout << "Disassembly:" << endl;
-            jit_dump_function(stdout, main, "main");
+            jit_dump_function(stdout, main, "program");
             cout << "Stack:" << endl;
             for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
@@ -682,7 +682,7 @@ struct VM
             // add them as 64 bit values
             jit_value_t r;
             if (op == "ADD") r = jit_insn_add(main, v1, v2);
-            else if (op == "SUB") r = jit_insn_add(main, jit_insn_neg(main, v1), v2);
+            else if (op == "SUB") r = jit_insn_sub(main, v2, v1);
             else if (op == "MUL") r = jit_insn_mul(main, v1, v2);
             else if (op == "DIV") r = jit_insn_div(main, v2, v1);
             else if (op == "EQ")  r = jit_insn_eq(main, v1, v2);
@@ -699,8 +699,8 @@ struct VM
         }
         else if (op == "POP")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
-            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, cm1));
         }
         else if (op == "CONS")
         {
@@ -798,11 +798,24 @@ struct VM
         }
         else if (op == "RJMP" || op == "RJNZ" || op == "RJZ")
         {
-            // TODO: check condition
-
+            jit_label_t if_yes = jit_label_undefined, if_no = jit_label_undefined;
+            // load value from stack
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp1 = jit_insn_add(main, sp, cm1);
+            jit_value_t val_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t val = jit_insn_and(main, jit_insn_load_relative(main, val_addr, 0, jit_type_ulong), cdatamask);
+            if (op != "RJMP")
+            {
+                if (op == "RJNZ") jit_insn_branch_if(main, val, &if_yes);
+                else if (op == "RJZ") jit_insn_branch_if_not(main, val, &if_yes);
+                jit_insn_branch(main, &if_no);
+                jit_insn_label(main, &if_yes);
+            }
             // jump
-            jit_insn_jump_table(main, jit_value_create_nint_constant(main, jit_type_uint, jit_jump_map[pc + std::stoi(tokens[1])]), 
+            jit_insn_jump_table(main, jit_value_create_nint_constant(main, jit_type_uint, jit_jump_map[pc + std::stoi(tokens[1])]),
                                     &jit_jump_table[0], jit_jump_table.size());            
+            if (op != "RJMP")
+                jit_insn_label(main, &if_no);
         }
         pc += 1;
     }
