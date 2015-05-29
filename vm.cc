@@ -129,6 +129,7 @@ struct VM
     std::vector<JitCell> jit_memory;
     size_t jit_stack_ptr;
     size_t jit_memory_ptr;
+    size_t jit_env_ptr;
     std::map<size_t, size_t> jit_jump_map;
     std::vector<jit_label_t> jit_jump_table;
     size_t jit_jump_table_current_index;
@@ -472,16 +473,18 @@ struct VM
     {
         if (ctx)
         {
-            cout << "Jump table size: " << jit_jump_table.size() << endl;
             for (auto& x : jit_jump_map)
                 cout << "  " << x.first << " - " << x.second << endl;
             cout << "Disassembly:" << endl;
             jit_dump_function(stdout, main, "program");
-            cout << "Stack:" << endl;
+            cout << "Environent pointer: " << jit_env_ptr <<  endl;
+            cout << "Stack size: " << jit_stack_ptr <<  endl;
+            cout << "Memory size: " << jit_memory_ptr <<  endl;
+            cout << "Stack:" <<  endl;
             for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
             cout << "Memory:" << endl;            
-            for (int i = jit_memory_ptr + 1; i >= 0; --i)
+            for (int i = 0; i < jit_memory_ptr; ++i)
                 cout << "    " << jit_memory[i].pp() << endl;
         }
         else
@@ -571,7 +574,7 @@ struct VM
         jit_stack.resize(STACK_SIZE);
         jit_memory.resize(MEMORY_SIZE);
         jit_stack_ptr = 0;
-        jit_memory_ptr = 0;
+        jit_memory_ptr = 2; // 0 - nil, 1 - global env, 2 - user data
         ctx = jit_context_create();
         jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, nullptr, 0, 1);
         main = jit_function_create(ctx, signature);
@@ -583,7 +586,7 @@ struct VM
         // bind jit memory
         jit_constant_t memory_addr_const;
         memory_addr_const.type = jit_type_void_ptr;
-        memory_addr_const.un.ptr_value = &jit_memory[2]; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
+        memory_addr_const.un.ptr_value = &jit_memory[0]; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
         memory_addr = jit_value_create_constant(main, &memory_addr_const);
         // bind jit stack pointer
         jit_constant_t stack_ptr_const;
@@ -603,9 +606,10 @@ struct VM
         // bind jit env var
         jit_constant_t env_ptr_const;
         env_ptr_const.type = jit_type_void_ptr;
-        env_ptr_const.un.ptr_value = &jit_memory[1]; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
+        env_ptr_const.un.ptr_value = &jit_env_ptr; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
         env_ptr = jit_value_create_constant(main, &env_ptr_const);
-        jit_insn_store_relative(main, env_ptr, 0, jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
+        jit_insn_store_relative(main, env_ptr, 0, jit_value_create_nint_constant(main, jit_type_uint, 1));
+        jit_insn_store_relative(main, memory_addr, 8, jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
     }
 
     void prepare_jump_table(const std::vector<std::string>& program)
@@ -798,7 +802,10 @@ struct VM
         {
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
             jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
-            jit_insn_store_relative(main, sp_addr, 0, jit_insn_load_relative(main, env_ptr, 0, jit_type_ulong));   
+            jit_value_t ep = jit_insn_load_relative(main, env_ptr, 0, jit_type_ulong);
+            jit_value_t ep_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, ep, c8));
+            jit_value_t env = jit_insn_load_relative(main, ep_addr, 0, jit_type_ulong);
+            jit_insn_store_relative(main, sp_addr, 0, env);   
             jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));   
         }
         else if (op == "STOREENV")
@@ -806,8 +813,12 @@ struct VM
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
-            jit_insn_store_relative(main, env_ptr, 0, jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong));
+            jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_int);
+            jit_value_t envmp = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp, c8));
+            jit_insn_store_relative(main, env_ptr, 0, mp);
+            jit_insn_store_relative(main, envmp, 0, jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong));
             jit_insn_store_relative(main, stack_ptr, 0, sp1);   
+            jit_insn_store_relative(main, memory_ptr, 0, jit_insn_add(main, mp, c1));
         }
         else if (op == "CALL" || op == "RET")
         {
@@ -818,6 +829,8 @@ struct VM
             jit_value_t lambda = jit_insn_load_relative(main, lambda_addr, 0, jit_type_ulong);
             // TODO: extract jump_map index from lambda
             jit_value_t ip;
+            // TODO: extract env from lambda
+            jit_value_t env;
             // TODO: store jump_map index and ENV on stack
             //jit_insn_store_relative(main, stack_ptr, 0, sp1);
             // branch to 'function'
