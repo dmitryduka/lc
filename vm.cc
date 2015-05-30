@@ -192,6 +192,11 @@ struct VM
         return strings;
     }
 
+    void jit_debug(jit_value_t v)
+    {
+        jit_insn_store_relative(main, dbg_ptr, 0, v);
+    }
+
     void run(const std::vector<std::string>& program)
     {
         pc = 0;
@@ -659,7 +664,7 @@ struct VM
         if (tokens.empty()) return;
         const std::string op = tokens[0];
         
-        if (op == "FIN") {}
+        if (op == "FIN") jit_insn_return(main, NULL);
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
             // increment sp
@@ -676,7 +681,7 @@ struct VM
                 else panic(op, "Lambda has no entry in the jump table");
             }
 
-            cellval = jit_value_create_long_constant(main, jit_type_long, cell.as64);
+            cellval = jit_value_create_long_constant(main, jit_type_ulong, cell.as64);
 
             if (op == "PUSHL") 
             {
@@ -685,7 +690,7 @@ struct VM
                 jit_insn_or(main, cellval, ep);
             }
             // current sp
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             // stack_addr + sp
             jit_value_t stack_addr_offsetted = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
             // store
@@ -696,7 +701,7 @@ struct VM
         else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "EQ" || op == "LT")
         {
             // current sp
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp_1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_2 = jit_insn_add(main, sp, cm2);
             jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_1, c8));
@@ -760,7 +765,7 @@ struct VM
         }
         else if (op == "SWAP")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_v2 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 2)));
             jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
@@ -774,7 +779,7 @@ struct VM
         }
         else if (op == "PUSHFS")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 1)));
             jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
             jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
@@ -785,7 +790,7 @@ struct VM
         }
         else if (op == "DEF")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
             jit_value_t ep = jit_insn_load_relative(main, env_ptr, 0, jit_type_uint);
@@ -816,7 +821,7 @@ struct VM
         {
             JitCell cell = JitCell::make_string(tokens[1]);
             // load a value from the top of the stack
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
             jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
@@ -834,7 +839,7 @@ struct VM
         {
             bool car = (op == "PUSHCAR" || op == "CAR") ? true : false;
             bool remove_from_stack = (op == "CAR" || op == "CDR") ? true : false;
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t pair_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
             // load pair from stack
@@ -844,7 +849,7 @@ struct VM
             if (car) mask = jit_value_create_long_constant(main, jit_type_ulong, 0x000000003FFFFFFFull);
             else mask = jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFC0000000ull);
             jit_value_t cell_addr = jit_insn_and(main, pair, mask);
-            if (!car) cell_addr = jit_insn_shr(main, cell_addr, jit_value_create_nint_constant(main, jit_type_int, 30));
+            if (!car) cell_addr = jit_insn_shr(main, cell_addr, jit_value_create_nint_constant(main, jit_type_uint, 30));
             // load left cell from memory
             jit_value_t result_addr = jit_insn_convert(main, 
                                                         jit_insn_add(main, 
@@ -872,7 +877,7 @@ struct VM
         }
         else if (op == "STOREENV")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_uint);
@@ -888,7 +893,7 @@ struct VM
         else if (op == "CALL")
         {
             // load IP from stack            
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t l_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t lambda = jit_insn_load_relative(main, l_addr, 0, jit_type_ulong);
@@ -896,7 +901,10 @@ struct VM
             jit_value_t lambda_env = jit_insn_and(main, lambda, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFF00000000ull));
             lambda_env = jit_insn_shr(main, lambda_env, jit_value_create_nint_constant(main, jit_type_uint, 32));
             // push env
-            jit_insn_store_relative(main, l_addr, 0, jit_insn_load_relative(main, env_ptr, 0, jit_type_uint));
+            jit_insn_store_relative(main, l_addr, 0, 
+                                                jit_insn_convert(main, 
+                                                    jit_insn_load_relative(main, env_ptr, 0, jit_type_uint), 
+                                                    jit_type_ulong, 0));
             // push ip
             jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
                                           jit_value_create_long_constant(main, jit_type_ulong, jit_jump_map[pc + 1]));
@@ -910,7 +918,7 @@ struct VM
         else if (op == "RET")
         {
             // at this point pc and env should be at the top of the stack, otherwise boom
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp2 = jit_insn_add(main, sp, cm2);
             // load pc
@@ -921,6 +929,8 @@ struct VM
             jit_value_t env = jit_insn_load_relative(main, env_addr, 0, jit_type_ulong);
             // set env
             jit_insn_store_relative(main, env_ptr, 0, jit_insn_convert(main, env, jit_type_uint, 0));
+            // we popped env + pc
+            jit_insn_store_relative(main, stack_ptr, 0, sp2);
             // branch back
             jit_insn_jump_table(main, pc, &jit_jump_table[0], jit_jump_table.size());
         }
@@ -928,7 +938,7 @@ struct VM
         {
             jit_label_t if_yes = jit_label_undefined, if_no = jit_label_undefined;
             // load value from stack
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_int);
+            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t val_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t val = jit_insn_and(main, jit_insn_load_relative(main, val_addr, 0, jit_type_ulong), cdatamask);
