@@ -471,6 +471,7 @@ struct VM
         }
         else if (op == "SWAP")
         {
+            // TODO: check swap argument and issue panic in case needed
             if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
             Cell tmp = stack.back();
             stack.back() = stack[stack.size() - 2 - std::stoi(tokens[1])];
@@ -664,7 +665,7 @@ struct VM
         if (tokens.empty()) return;
         const std::string op = tokens[0];
         
-        if (op == "FIN") jit_insn_return(main, NULL);
+        if (op == "FIN") jit_insn_return(main, nullptr);
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
             // increment sp
@@ -676,9 +677,14 @@ struct VM
             else if(op == "PUSHL") 
             {
                 uint32_t lambda_start = std::stoi(tokens[1]);
-                if (jit_jump_map.count(lambda_start))
-                    cell = JitCell::make_lambda(jit_jump_map[lambda_start], 0);
-                else panic(op, "Lambda has no entry in the jump table");
+                // check if this is a dummy/test lambda for type checking (see EQT)
+                if (lambda_start == -1) cell = JitCell::make_lambda(0, 0);
+                else
+                {
+                    if (jit_jump_map.count(lambda_start))
+                        cell = JitCell::make_lambda(jit_jump_map[lambda_start], 0);
+                    else panic(op, "Lambda has no entry in the jump table");
+                }            
             }
 
             cellval = jit_value_create_long_constant(main, jit_type_ulong, cell.as64);
@@ -698,7 +704,7 @@ struct VM
             // modify sp
             jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
-        else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "EQ" || op == "LT")
+        else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "EQ" || op == "LT" || "EQT")
         {
             // current sp
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
@@ -708,10 +714,9 @@ struct VM
             jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8));
             // load sp-1 snd sp-2 values, save v1 type and clear type bits on both values
             jit_value_t v1t = jit_insn_load_relative(main, v1_addr, 0, jit_type_long);
-            jit_value_t t1 = jit_insn_and(main, v1t, ctypemask);
+            jit_value_t v2t = jit_insn_load_relative(main, v2_addr, 0, jit_type_long);
             jit_value_t v1 = jit_insn_and(main, v1t, cdatamask);
-            jit_value_t v2 = jit_insn_and(main, jit_insn_load_relative(main, v2_addr, 0, jit_type_long), cdatamask);
-            // add them as 64 bit values
+            jit_value_t v2 = jit_insn_and(main, v2t, cdatamask);
             jit_value_t r;
             if (op == "ADD") r = jit_insn_add(main, v1, v2);
             else if (op == "SUB") r = jit_insn_sub(main, v2, v1);
@@ -719,15 +724,17 @@ struct VM
             else if (op == "DIV") r = jit_insn_div(main, v2, v1);
             else if (op == "EQ")  r = jit_insn_eq(main, v1, v2);
             else if (op == "LT")  r = jit_insn_lt(main, v2, v1); // TODO: check this
+            else if (op == "EQT") r = jit_insn_eq(main, jit_insn_and(main, v1t, ctypemask), jit_insn_and(main, v2t, ctypemask));
             // and fix type in case result occupies more than 60 bits
-            jit_value_t rf = jit_insn_or(main, jit_insn_and(main, r, cdatamask), t1);
+            jit_value_t rf = jit_insn_or(main, jit_insn_and(main, r, cdatamask), 
+                                            jit_value_create_long_constant(main, jit_type_ulong, JitCell::make_integer(0).as64));
             // store value on top of the stack
-             // EQ, LT operations doesn't pop operands from stack
-            if (op == "EQ" || op == "LT") v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
-                jit_insn_store_relative(main, v2_addr, 0, rf);
+             // EQ, LT, EQT operations doesn't pop operands from stack
+            if (op == "EQ" || op == "LT" || op == "EQT") v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            jit_insn_store_relative(main, v2_addr, 0, rf);
             // modify sp
-            if (op == "EQ" || op == "LT") sp_1 = jit_insn_add(main, sp, c1);
-                jit_insn_store_relative(main, stack_ptr, 0, sp_1);
+            if (op == "EQ" || op == "LT" || op == "EQT") sp_1 = jit_insn_add(main, sp, c1);
+            jit_insn_store_relative(main, stack_ptr, 0, sp_1);
         }
         else if (op == "POP")
         {

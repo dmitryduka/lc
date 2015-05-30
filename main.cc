@@ -740,7 +740,7 @@ int main()
     // parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
     // parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
     // parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
-    parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
+    // parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
     // parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
     // parse_list("(define append (lambda (x y) (cond (null? x) y \
     // 											   (1) (cons (first x) (append (rest x) y)))))").compile(program, functions);
@@ -784,7 +784,7 @@ int main()
     // parse_list("(car l1s)").compile(program, functions);
     // parse_list("(length l1s)").compile(program, functions);
     //parse_list("(factorl 10)").compile(program, functions);
-    parse_list("(square 10)").compile(program, functions);
+    parse_list("(int? 10)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
