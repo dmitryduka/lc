@@ -704,7 +704,10 @@ struct VM
             // modify sp
             jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
-        else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "EQ" || op == "LT" || op == "EQT")
+        else if (op == "ADD" || op == "SUB" || 
+                op == "MUL" || op == "DIV" || 
+                op == "EQ" || op == "LT" || 
+                op == "EQT")
         {
             // current sp
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
@@ -729,11 +732,11 @@ struct VM
             jit_value_t rf = jit_insn_or(main, jit_insn_and(main, r, cdatamask), 
                                             jit_value_create_long_constant(main, jit_type_ulong, JitCell::make_integer(0).as64));
             // store value on top of the stack
-             // EQ, LT, EQT operations doesn't pop operands from stack
-            if (op == "EQ" || op == "LT" || op == "EQT") v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+             // EQT operations doesn't pop operands from stack
+            if (op == "EQT") v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
             jit_insn_store_relative(main, v2_addr, 0, rf);
             // modify sp
-            if (op == "EQ" || op == "LT" || op == "EQT") sp_1 = jit_insn_add(main, sp, c1);
+            if (op == "EQT") sp_1 = jit_insn_add(main, sp, c1);
             jit_insn_store_relative(main, stack_ptr, 0, sp_1);
         }
         else if (op == "POP")
@@ -777,7 +780,6 @@ struct VM
             jit_value_t sp_v2 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 2)));
             jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
             jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v2, c8));
-            jit_debug(v1_addr);
             // load values
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
             jit_value_t v2 = jit_insn_load_relative(main, v2_addr, 0, jit_type_ulong);
