@@ -737,16 +737,16 @@ int main()
     // 											(1) 0)))").compile(program, functions);
     // parse_list("(define first (lambda (x) (cond (atom? x) x (1) (car x))))").compile(program, functions);
     // parse_list("(define rest  (lambda (x) (cond (atom? x) Nil (1) (cdr x))))").compile(program, functions);
-    parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
-    parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
-    parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
+    // parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
+    // parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
+    // parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
     // parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
-    // parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
+    parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
     // parse_list("(define append (lambda (x y) (cond (null? x) y \
     // 											   (1) (cons (first x) (append (rest x) y)))))").compile(program, functions);
-    // parse_list("(define accum (lambda (op start l) \
-    //                                   (cond (null? l) start \
-    //                                         (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
+    parse_list("(define accum (lambda (op start l) \
+                                      (cond (null? l) start \
+                                            (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
     // parse_list("(define reverse (lambda (l) (begin \
     // 											(define rev-aux (lambda (x y) \
     // 																		(cond (null? x) y \
@@ -777,14 +777,14 @@ int main()
     // parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (first l)) (map f (rest l))))))").compile(program, functions);
     // parse_list("(define length (lambda (l) (cond (null? l) 0 (atom? l) 1 (1) (+ 1 (length (rest l))))))").compile(program, functions);
     // parse_list("(define factl (lambda (x) (cond (int? x) (cond (eq x 2) 2 (1) (* x (factl (- x 1)))) (1) Nil)))").compile(program, functions);
-    //parse_list("(define factaux (lambda (x a) (cond (eq x 1) a (1) (factaux (- x 1) (* x a)))))").compile(program, functions);
-    //parse_list("(define factorl (lambda (x) (factaux x 1)))").compile(program, functions);
-    // parse_list("(define l1 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 Nil)))))))))))))))))))))))))))))").compile(program, functions);
+    // parse_list("(define faux (lambda (x a) (cond (eq x 1) a (1) (faux (- x 1) (* x a)))))").compile(program, functions);
+    // parse_list("(define factl (lambda (x) (faux x 1)))").compile(program, functions);
+    parse_list("(define l1 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 (cons 8 (cons 2 (cons 3 (cons 4 (cons 5 (cons 1 (cons 7 Nil)))))))))))))))))))))))))))))").compile(program, functions);
     // parse_list("(define l1s (qsort l1))").compile(program, functions);
     // parse_list("(car l1s)").compile(program, functions);
     // parse_list("(length l1s)").compile(program, functions);
-    //parse_list("(factl 10)").compile(program, functions);
-    parse_list("(even? 11)").compile(program, functions);
+    parse_list("(accum add 0 l1)").compile(program, functions);
+    // parse_list("(factl 10)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)
