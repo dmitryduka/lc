@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <sstream>
 #include <fstream>
+#include <chrono>
 
 #include <jit/jit.h>
 #include <jit/jit-dump.h>
@@ -485,19 +486,17 @@ struct VM
     {
         if (ctx)
         {
-            for (auto& x : jit_jump_map)
-                cout << "  " << x.first << " - " << x.second << endl;
-            cout << "Disassembly:" << endl;
-            jit_dump_function(stdout, main, "program");
+            // cout << "Disassembly:" << endl;
+            // jit_dump_function(stdout, main, "program");
             cout << "Environent pointer: " << jit_env_ptr <<  endl;
             cout << "Stack size: " << jit_stack_ptr <<  endl;
             cout << "Memory size: " << jit_memory_ptr <<  endl;
             cout << "Stack:" <<  endl;
             for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
-            cout << "Memory:" << endl;            
-            for (int i = 0; i < jit_memory_ptr; ++i)
-                cout << "    " << jit_memory[i].pp() << endl;
+            // cout << "Memory:" << endl;            
+            // for (int i = 0; i < jit_memory_ptr; ++i)
+            //     cout << "    " << jit_memory[i].pp() << endl;
         }
         else
         {
@@ -978,8 +977,11 @@ int main()
     while (std::getline(std::cin, line))
        program.push_back(line);
     VM vm;
-    vm.init_jit(); 
+    vm.init_jit();
+    auto start = std::chrono::steady_clock::now();
     vm.run(program);
+    auto diff = std::chrono::steady_clock::now() - start;
+    cout << "Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(diff).count() << " ms" << endl;
     vm.debug();
     vm.gc();
     return 0;    
