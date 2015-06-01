@@ -689,11 +689,11 @@ struct VM
 
             cellval = jit_value_create_long_constant(main, jit_type_ulong, cell.as64);
 
-            if (op == "PUSHL") 
+            if (op == "PUSHL" && std::stoi(tokens[1]) != -1) 
             {
                 jit_value_t ep = jit_insn_convert(main, jit_insn_load_relative(main, env_ptr, 0, jit_type_uint), jit_type_ulong, 0);
                 ep = jit_insn_shl(main, ep, jit_value_create_nint_constant(main, jit_type_uint, 32));
-                jit_insn_or(main, cellval, ep);
+                cellval = jit_insn_or(main, cellval, ep);
             }
             // current sp
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
