@@ -6,6 +6,7 @@
 #include <memory>
 #include <unordered_map>
 #include <algorithm>
+#include <chrono>
 
 struct Env;
 
@@ -638,7 +639,7 @@ Cell parse_list(const char* input, const char** jumped_to = NULL)
                     // issue error in case symbol size is more than 7 characters:
                     // it wont fit into the Cell in the VM
                     // TODO: mangle names to shorter strings
-                    if (symbol.size() > 7) { std::cout << "Long names are not supported: " << symbol << endl; exit(1); }
+                    // if (symbol.size() > 7) { std::cout << "Long names are not supported: " << symbol << endl; exit(1); }
                     cell.list.push_back(Cell(symbol));
                     symbol_ready = false;
                     symbol.clear();
@@ -789,18 +790,18 @@ int main()
     link(program, functions);
     for (auto x : program)
         cout << x << endl;
-    return 0;
 {
+    auto start = std::chrono::steady_clock::now();
+
     shared_ptr<Env> env = Env::global();
     // lambdas
-    parse_list("(define square (lambda (x) (* x x)))").eval(env);
-    parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
-    parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
-    parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
-    parse_list("(apply-func square 5)").eval(env).pretty_print();
-    // fibonacci recursive
-    parse_list("(define fib (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fib (- x 1)) (fib (- x 2))))))").eval(env);
-    parse_list("(fib 20)").eval(env).pretty_print();
+    // parse_list("(define square (lambda (x) (* x x)))").eval(env);
+    // parse_list("(define sum-of-squares (lambda (x y) (+ (square x) (square y))))").eval(env);
+    // parse_list("(sum-of-squares 5 6)").eval(env).pretty_print();
+    // parse_list("(define apply-func (lambda (f x) (f x)))").eval(env);
+    // // fibonacci recursive
+    // parse_list("(define fib (lambda (x) (cond (eq x 1) 1 (eq x 2) 1 (1) (+ (fib (- x 1)) (fib (- x 2))))))").eval(env);
+    // parse_list("(fib 20)").eval(env).pretty_print();
     // predicates
     parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").eval(env);
     parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").eval(env);
@@ -808,33 +809,33 @@ int main()
     parse_list("(define neq (lambda (x y) (not (eq x y))))").eval(env);
     parse_list("(define more (lambda (x y) (cond (not (less x y)) (cond (neq x y) 1 (1) 0) (1) 0)))").eval(env);
      // closure 
-    parse_list("(define new-withdraw (let ((balance 100)) (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance)) (1) Nil))))").eval(env);
-    parse_list("(new-withdraw 10)").eval(env).pretty_print();
-    parse_list("(new-withdraw 10)").eval(env).pretty_print();
+    // parse_list("(define new-withdraw (let ((balance 100)) (lambda (amount) (cond (more balance amount) (begin (set balance (- balance amount)) (balance)) (1) Nil))))").eval(env);
+    // parse_list("(new-withdraw 10)").eval(env).pretty_print();
+    // parse_list("(new-withdraw 10)").eval(env).pretty_print();
     // loop
-    parse_list("(define ntimes (lambda (n l) (cond (eq n 0) (eval l) (1) (begin (eval l) (ntimes (- n 1) l)))))").eval(env); 
-    parse_list("(ntimes 10 (quote (new-withdraw 1)))").eval(env).pretty_print(); 
-    parse_list("(undef new-withdraw)").eval(env);
+    // parse_list("(define ntimes (lambda (n l) (cond (eq n 0) (eval l) (1) (begin (eval l) (ntimes (- n 1) l)))))").eval(env); 
+    // parse_list("(ntimes 10 (quote (new-withdraw 1)))").eval(env).pretty_print(); 
+    // parse_list("(undef new-withdraw)").eval(env);
     // cons, car, cdr using closure
     parse_list("(define cons (lambda (left right) (lambda (m) (cond (eq m 0) left (1) right))))").eval(env);
     parse_list("(define car (lambda (x) (cond (list? x) (car* x) (1) (cond (func? x) (x 0) (1) x))))").eval(env);
     parse_list("(define cdr (lambda (x) (cond (list? x) (cdr* x) (1) (cond (func? x) (x 1) (1) Nil))))").eval(env);
     parse_list("(define list (lambda (x) (cond (null? x) Nil (1) (cons (car x) (list (cdr x))))))").eval(env); 
-    parse_list("(define accumulate (lambda (op start l) \
-                                            (cond (null? l) start \
-                                                    (1) (op (car l) (accumulate op start (cdr l))))))").eval(env);
+    // parse_list("(define accumulate (lambda (op start l) \
+    //                                         (cond (null? l) start \
+    //                                                 (1) (op (car l) (accumulate op start (cdr l))))))").eval(env);
     parse_list("(define append (lambda (x y) (cond (null? x) y \
                                                     (1) (cons (cond (func? x) (car x) (1) x) (cond (null? (cdr x)) y\
                                                                              (1) (append (cdr x) y))))))").eval(env); 
-    parse_list("(define reverse (lambda (l) (cond (null? (cdr l)) l (1) (append (reverse (cdr l)) (car l)))))").eval(env);
-    parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (car l)) (map f (cdr l))))))").eval(env);
+    // parse_list("(define reverse (lambda (l) (cond (null? (cdr l)) l (1) (append (reverse (cdr l)) (car l)))))").eval(env);
+    // parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (car l)) (map f (cdr l))))))").eval(env);
     parse_list("(define filter (lambda (pred l) \
                                         (cond (null? l) Nil \
                                               (1) (append (cond (pred (car l)) (car l) \
                                                                 (1) Nil) \
                                                           (filter pred (cdr l))))))").eval(env);
-    parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
-    parse_list("(define nth (lambda (x l) (cond (eq x 0) (car l) (1) (nth (- x 1) (cdr l)))))").eval(env);
+    // parse_list("(define remove (lambda (x l) (filter (lambda (k) (neq k x)) l)))").eval(env);
+    // parse_list("(define nth (lambda (x l) (cond (eq x 0) (car l) (1) (nth (- x 1) (cdr l)))))").eval(env);
     parse_list("(define qsort (lambda (l) (begin (define first (car l)) \
                                                  (define rest (cdr l)) \
                                                  (define lesseqthan (lambda (x) (lambda (y) (cond (eq x y) 1 \
@@ -849,51 +850,48 @@ int main()
                                                        (null? rest) first \
                                                        (1) (append (qsort (filter (lesseqthan first) rest)) \
                                                                    (append first (qsort (filter (morethan first) rest))))))))").eval(env);
-    parse_list("(define loop (lambda (f *from* *to*) (tagbody start \
-                                                                (f) \
-                                                                (cond  (eq *from* *to*) Nil \
-                                                                       (1) (begin (set *from* (+ *from* 1))\
-                                                                                  (goto start))))))").eval(env);
-    parse_list("(define until (lambda (f pred) (tagbody start \
-                                                        (f) \
-                                                        (cond (pred) Nil \
-                                                              (1) (goto start)))))").eval(env);
-    parse_list("(define length (lambda (l) (begin (define i 0) \
-                                                  (cond (null? l) 0 \
-                                                  (1) (begin (until (lambda () (begin (set i (+ i 1)) \
-                                                                                      (set l (cdr l)))) \
-                                                                    (lambda () (null? l))) \
-                                                  i)))))").eval(env); 
-    parse_list("(define newline (lambda () (print*)))").eval(env);
-    parse_list("(define print (lambda (l) (cond (null? l) (newline) \
-                                                (1) (begin (print* (car l)) \
-                                                           (print (cdr l))))))").eval(env); 
+    // parse_list("(define loop (lambda (f *from* *to*) (tagbody start \
+    //                                                             (f) \
+    //                                                             (cond  (eq *from* *to*) Nil \
+    //                                                                    (1) (begin (set *from* (+ *from* 1))\
+    //                                                                               (goto start))))))").eval(env);
+    // parse_list("(define until (lambda (f pred) (tagbody start \
+    //                                                     (f) \
+    //                                                     (cond (pred) Nil \
+    //                                                           (1) (goto start)))))").eval(env);
+    // parse_list("(define length (lambda (l) (begin (define i 0) \
+    //                                               (cond (null? l) 0 \
+    //                                               (1) (begin (until (lambda () (begin (set i (+ i 1)) \
+    //                                                                                   (set l (cdr l)))) \
+    //                                                                 (lambda () (null? l))) \
+    //                                               i)))))").eval(env); 
+    // parse_list("(define newline (lambda () (print*)))").eval(env);
+    // parse_list("(define print (lambda (l) (cond (null? l) (newline) \
+    //                                             (1) (begin (print* (car l)) \
+    //                                                        (print (cdr l))))))").eval(env); 
     // parse_list("(define curry (lambda (f x) (lambda () (f ))))").eval(env);
     // currying
-    parse_list("(define func (lambda (a b c d) (+ a b c d)))").eval(env);
-    parse_list("(func 1 2 3 4)").eval(env).pretty_print();
-    // list transformations
-    parse_list("(define l1 (list (quote (1 2 3 4 5))))").eval(env); 
-    parse_list("(define l2 (list (quote (6 7 8 9 10))))").eval(env); 
-    parse_list("(define l1l2 (append l1 l2))").eval(env); 
-    parse_list("(define l1l2rev (reverse (map square (filter even? (remove 2 l1l2)))))").eval(env);
-    parse_list("(print l1l2)").eval(env); 
-    parse_list("(print l1l2rev)").eval(env); 
-    parse_list("(accumulate + 0 l1l2rev)").eval(env).pretty_print();
+    // parse_list("(define func (lambda (a b c d) (+ a b c d)))").eval(env);
+    // parse_list("(func 1 2 3 4)").eval(env).pretty_print();
+    // // list transformations
+    // parse_list("(define l1 (list (quote (1 2 3 4 5))))").eval(env); 
+    // parse_list("(define l2 (list (quote (6 7 8 9 10))))").eval(env); 
+    // parse_list("(define l1l2 (append l1 l2))").eval(env); 
+    // parse_list("(define l1l2rev (reverse (map square (filter even? (remove 2 l1l2)))))").eval(env);
+    // parse_list("(print l1l2)").eval(env); 
+    // parse_list("(print l1l2rev)").eval(env); 
+    // parse_list("(accumulate + 0 l1l2rev)").eval(env).pretty_print();
     // sort
-    parse_list("(define unsorted (list (quote (9 3 2 7 9 4 6 1 5 8 10))))").eval(env); 
+    parse_list("(define unsorted (list (quote (9 3 2 7 9 4 6 1 5 8 10 9 3 2 7 9 4 6 1 5 8 9 3 2 7 9 4 6))))").eval(env); 
     parse_list("(define sorted (qsort unsorted))").eval(env); 
-    parse_list("(print unsorted)").eval(env); 
-    parse_list("(print sorted)").eval(env);
-    parse_list("(loop (lambda () (print *from*)) 1 10)").eval(env);
-    parse_list("(length sorted)").eval(env).pretty_print(); 
-    parse_list("(begin (define k 0) (until (lambda () (begin (print k) (set k (+ k 1)))) (lambda () (eq k 10))))").eval(env);
+//    parse_list("(print unsorted)").eval(env); 
+  //  parse_list("(print sorted)").eval(env);
+    // parse_list("(loop (lambda () (print *from*)) 1 10)").eval(env);
+    // parse_list("(length sorted)").eval(env).pretty_print(); 
+    // parse_list("(begin (define k 0) (until (lambda () (begin (print k) (set k (+ k 1)))) (lambda () (eq k 10))))").eval(env);
     // initiate cleanup
-    env->clear();
-}
-{
-    shared_ptr<Env> env = Env::global();
-    parse_list("(+ 10 25)").eval(env).pretty_print();
+    auto diff = std::chrono::steady_clock::now() - start;
+    cout << "Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(diff).count() << " ms" << endl;
     env->clear();
 }
     dump_graph();
