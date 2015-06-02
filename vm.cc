@@ -121,6 +121,12 @@ struct JitCell
     std::string pp() { return type_to_string(static_cast<CellType>(type)) + " : " + data_to_string(*this); }
 }  __attribute__((packed));
 
+void jit_vm_print_cell(const JitCell cell)
+{
+    if (cell.type == Int) printf("%llu", cell.integer);
+    else if (cell.type == String) printf("%s", cell.string);
+}
+
 struct VM
 {
     // interpreter variables
@@ -263,6 +269,14 @@ struct VM
             Cell y = stack.back(); stack.pop_back();
             if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
             stack.push_back(Cell::make_integer(y.integer / x.integer));
+        }
+        else if (op == "MOD")
+        {
+            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
+            Cell x = stack.back(); stack.pop_back();
+            Cell y = stack.back(); stack.pop_back();
+            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
+            stack.push_back(Cell::make_integer(y.integer % x.integer));
         }
         else if (op == "DEF")
         {
@@ -665,6 +679,29 @@ struct VM
         const std::string op = tokens[0];
         
         if (op == "FIN") jit_insn_return(main, nullptr);
+        else if (op == "PRN" || op == "PRNL")
+        {
+            jit_type_t type[] = { jit_type_ulong };
+            jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, type, 1, 1);
+            jit_value_t val;
+            if (op == "PRNL")
+            {
+                JitCell newline = JitCell::make_string("\n");
+                val = jit_value_create_long_constant(main, jit_type_ulong, newline.as64);
+            }
+            else
+            {
+                jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+                jit_value_t sp1 = jit_insn_add(main, sp, cm1);
+                jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+                jit_insn_store_relative(main, stack_ptr, 0, sp1);
+                val = jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong);
+            }
+            jit_insn_call_native(main, "print", reinterpret_cast<void*>(&jit_vm_print_cell), signature, &val, 1, JIT_CALL_NOTHROW);
+        }
+        else if (op == "PRNL")
+        {
+        }
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
             // increment sp
@@ -724,6 +761,7 @@ struct VM
             else if (op == "SUB") r = jit_insn_sub(main, v2, v1);
             else if (op == "MUL") r = jit_insn_mul(main, v1, v2);
             else if (op == "DIV") r = jit_insn_div(main, v2, v1);
+            else if (op == "MOD") r = jit_insn_rem(main, v2, v1);
             else if (op == "EQ")  r = jit_insn_eq(main, v1, v2);
             else if (op == "LT")  r = jit_insn_lt(main, v2, v1); // TODO: check this
             else if (op == "EQT") r = jit_insn_eq(main, jit_insn_and(main, v1t, ctypemask), jit_insn_and(main, v2t, ctypemask));
@@ -982,7 +1020,7 @@ int main()
     vm.run(program);
     auto diff = std::chrono::steady_clock::now() - start;
     cout << "Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(diff).count() << " ms" << endl;
-    vm.debug();
+    // vm.debug();
     vm.gc();
     return 0;    
 }
