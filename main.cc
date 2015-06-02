@@ -511,6 +511,7 @@ void Cell::compile(std::vector<std::string>& program,
                     list[1].compile(program, functions);
                     program.push_back("PRN"); 
                 }
+                program.push_back("PUSHNIL");
             }
             else if (list[0].name == "null?")
             {
@@ -757,7 +758,8 @@ int main()
     // parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
     // parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
     // parse_list("(define append (lambda (x y) (cond (null? x) y \
-    // 											   (1) (cons (first x) (append (rest x) y)))))").compile(program, functions);
+    //                                             (1) (cons (first x) (append (rest x) y)))))").compile(program, functions);
+    parse_list("(define apply (lambda (f l) (cond (atom? l) (f l) (1) (begin (f (first l)) (apply f (rest l))))))").compile(program, functions);
     // parse_list("(define accum (lambda (op start l) \
     //                                   (cond (null? l) start \
     //                                         (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
@@ -789,14 +791,16 @@ int main()
     //                                                    (1) (append (qsort (filter (<= f) r)) \
     //                                                                (append f (qsort (filter (> f) r))))))))").compile(program, functions);
     // parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (first l)) (map f (rest l))))))").compile(program, functions);
-    parse_list("(define length (lambda (l) (cond (null? l) 0 (atom? l) 1 (1) (+ 1 (length (rest l))))))").compile(program, functions);
     // parse_list("(define faux (lambda (x a) (cond (eq x 1) a (1) (faux (- x 1) (* x a)))))").compile(program, functions);
     // parse_list("(define factl (lambda (x) (faux x 1)))").compile(program, functions);
+    parse_list("(define length (lambda (l) (cond (null? l) 0 (atom? l) 1 (1) (+ 1 (length (rest l))))))").compile(program, functions);
+    parse_list("(define prnel (lambda (x) (print x)))").compile(program, functions);
     parse_list("(define gen1 (lambda (x) (cond (eq x 1) 1 (1) (cons 1 (gen1 (- x 1))))))").compile(program, functions);
-    parse_list("(define outlp (lambda (x) (cond (eq x 9) () (1) ())))").compile(program, functions);
+    // parse_list("(define outlp (lambda (x) (cond (eq x 9) () (1) ())))").compile(program, functions);
     parse_list("(define l1 (cons 0 (cons 2 (gen1 107))))").compile(program, functions);
-    parse_list("(print (length l1))").compile(program, functions);
+    parse_list("(apply prnel l1)").compile(program, functions);
     parse_list("(print)").compile(program, functions);
+    //parse_list("(prnel 1)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)

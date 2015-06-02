@@ -121,10 +121,12 @@ struct JitCell
     std::string pp() { return type_to_string(static_cast<CellType>(type)) + " : " + data_to_string(*this); }
 }  __attribute__((packed));
 
-void jit_vm_print_cell(const JitCell cell)
+template<typename T>
+void jit_vm_print_cell(const T cell)
 {
-    if (cell.type == Int) printf("%llu", cell.integer);
-    else if (cell.type == String) printf("%s", cell.string);
+    if (cell.type == Int) cout << cell.integer;
+    else if (cell.type == String) cout << cell.string;
+    else if (cell.type == Nil) cout << "Nil";
 }
 
 struct VM
@@ -230,7 +232,17 @@ struct VM
         auto tokens = tokenize(instruction);
         if (tokens.empty()) return;
         const std::string op = tokens[0];
-        if (op == "PUSHCI")
+        if (op == "PRN")
+        {
+            if (stack.size() < 1) return panic(op, "Not enough elements on the stack");
+            Cell x = stack.back(); stack.pop_back();
+            jit_vm_print_cell(x);
+        }
+        else if (op == "PRNL")
+        {
+            jit_vm_print_cell(Cell::make_string("\n"));
+        }
+        else if (op == "PUSHCI")
         {
             stack.push_back(Cell::make_integer(std::stoi(tokens[1])));
         }
@@ -697,10 +709,7 @@ struct VM
                 jit_insn_store_relative(main, stack_ptr, 0, sp1);
                 val = jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong);
             }
-            jit_insn_call_native(main, "print", reinterpret_cast<void*>(&jit_vm_print_cell), signature, &val, 1, JIT_CALL_NOTHROW);
-        }
-        else if (op == "PRNL")
-        {
+            jit_insn_call_native(main, "print", reinterpret_cast<void*>(&jit_vm_print_cell<JitCell>), signature, &val, 1, JIT_CALL_NOTHROW);
         }
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
