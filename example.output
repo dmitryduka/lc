@@ -1,0 +1,33 @@
+javol@timelinex:~/devel/lc$ ./main | ./vm
+271828182845904523536028747135266249775724709369995957496696762772407663035354759457138217852516642
+Nil
+
+Time: 11008 ms
+Environent pointer: 1
+Stack size: 21
+Memory size: 29481653
+Stack:
+    Nil : Unknown
+    Nil : Unknown
+    String : l2
+    String : l1
+    String : otloop
+    String : mnloop
+    String : inloop
+    String : gen1
+    String : setnth
+    String : stnaux
+    String : firstn
+    String : fstnax
+    String : nth
+    String : nthaux
+    String : length
+    String : prnel
+    String : apply
+    String : append
+    String : rest
+    String : first
+    String : atom?
+Garbage collecting: 1 cells
+  Found orphaned cells: 1
+  Found used cells: 0
