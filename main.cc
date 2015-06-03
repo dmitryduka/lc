@@ -810,7 +810,28 @@ int main()
     // main loop
     parse_list("(define mnloop (lambda (l x n) (cond (eq n 1)  (inloop l x n) (1) (begin (define r (inloop l x n)) (mnloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
     // outer loop
-    parse_list("(define otloop (lambda (l x n) (cond (eq n 10) (print) (1) (begin (define r (mnloop l x n)) (print (cdr r)) (otloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
+    parse_list("(define otloop (lambda (l x n) (cond (eq n 100) (print) (1) (begin (define r (mnloop l x n)) (print (cdr r)) (otloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
+
+/*
+
+int main() {
+      int N = 109, a[109], x;
+      for (int n = N - 1; n > 0; --n) a[n] = 1;
+      a[1] = 2;
+
+      while (N > 9) {
+          int n = N--;
+          while (--n) {
+              a[n] = x % n;
+              x = 10 * a[n-1] + x/n;
+          }
+          printf("%d", x);
+      }
+      return 0;
+  }
+
+*/
+
 
     parse_list("(define l1 (cons 0 (cons 2 (gen1 107))))").compile(program, functions);
     parse_list("(define l2 (otloop l1 0 108))").compile(program, functions);
