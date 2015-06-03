@@ -1024,7 +1024,7 @@ int main()
     while (std::getline(std::cin, line))
        program.push_back(line);
     VM vm;
-    // vm.init_jit();
+    vm.init_jit();
     auto start = std::chrono::steady_clock::now();
     vm.run(program);
     auto diff = std::chrono::steady_clock::now() - start;

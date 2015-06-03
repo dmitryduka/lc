@@ -810,7 +810,7 @@ int main()
     // main loop
     parse_list("(define mnloop (lambda (l x n) (cond (eq n 1)  (inloop l x n) (1) (begin (define r (inloop l x n)) (mnloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
     // outer loop
-    parse_list("(define otloop (lambda (l x n) (cond (eq n 100) (print) (1) (begin (define r (mnloop l x n)) (print (cdr r)) (otloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
+    parse_list("(define otloop (lambda (l x n) (cond (eq n 10) (print) (1) (begin (define r (mnloop l x n)) (print (cdr r)) (otloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
 
 /*
 
