@@ -13,7 +13,7 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 100000;
+const size_t MEMORY_SIZE = 100000000;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer };
 
@@ -124,9 +124,10 @@ struct JitCell
 template<typename T>
 void jit_vm_print_cell(const T cell)
 {
-    if (cell.type == Int) cout << cell.integer;
+    if (cell.type == Int) printf("%llu", cell.integer);
     else if (cell.type == String) cout << cell.string;
     else if (cell.type == Nil) cout << "Nil";
+    fflush(stdout);
 }
 
 struct VM
@@ -752,7 +753,7 @@ struct VM
         else if (op == "ADD" || op == "SUB" || 
                 op == "MUL" || op == "DIV" || 
                 op == "EQ" || op == "LT" || 
-                op == "EQT")
+                op == "EQT" || op == "MOD")
         {
             // current sp
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
@@ -1016,7 +1017,6 @@ struct VM
     }
 };
 
-
 int main()
 {    
     std::string line;
@@ -1029,7 +1029,7 @@ int main()
     vm.run(program);
     auto diff = std::chrono::steady_clock::now() - start;
     cout << "Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(diff).count() << " ms" << endl;
-    // vm.debug();
+    vm.debug();
     vm.gc();
     return 0;    
 }

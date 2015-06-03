@@ -793,21 +793,28 @@ int main()
     // parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (first l)) (map f (rest l))))))").compile(program, functions);
     // parse_list("(define faux (lambda (x a) (cond (eq x 1) a (1) (faux (- x 1) (* x a)))))").compile(program, functions);
     // parse_list("(define factl (lambda (x) (faux x 1)))").compile(program, functions);
+    parse_list("(define prnel (lambda (x) (begin (print x) (print))))").compile(program, functions);
     parse_list("(define length (lambda (l) (cond (null? l) 0 (atom? l) 1 (1) (+ 1 (length (rest l))))))").compile(program, functions);
+    // get nth element
     parse_list("(define nthaux (lambda (c n l) (cond (eq n c) (first l) (1) (cond (atom? l) Nil (1) (nthaux (+ c 1) n (rest l))))))").compile(program, functions);
     parse_list("(define nth (lambda (n l) (nthaux 0 n l)))").compile(program, functions);
+    // set nth element
     parse_list("(define fstnax (lambda (c n l) (cond (eq n c) (first l) (1) (cons (first l) (fstnax (+ c 1) n (rest l))))))").compile(program, functions);
     parse_list("(define firstn (lambda (n l) (fstnax 1 n l)))").compile(program, functions);
-    parse_list("(define stnaux (lambda (c n l v) (cond (eq n c) (cons v (rest l)) (1) (cond (atom? l) Nil (1) (stnaux (+ c 1) n (rest l) v)))))").compile(program, functions);
-    parse_list("(define setnth (lambda (n l x) (append (firstn (- n 1) l) (stnaux 0 n l x))))").compile(program, functions);
-    parse_list("(define prnel (lambda (x) (begin (print x) (print))))").compile(program, functions);
+    parse_list("(define stnaux (lambda (c n l v) (cond (eq n c) (cond (atom? l) v (1) (cons v (rest l))) (1) (cond (atom? l) l (1) (stnaux (+ c 1) n (rest l) v)))))").compile(program, functions);
+    parse_list("(define setnth (lambda (n l x) (append (firstn n l) (stnaux 0 n l x))))").compile(program, functions);
+    // generate a list of elements with given value
     parse_list("(define gen1 (lambda (x) (cond (eq x 1) 1 (1) (cons 1 (gen1 (- x 1))))))").compile(program, functions);
-    parse_list("(define inloop (lambda (l x n) (cons (setnth n l x) (+ (* 10 (nth (- n 1) l)) (/ x n)))))").compile(program, functions);
+    // inner loop, return pair <list, x>
+    parse_list("(define inloop (lambda (l x n) (cons (setnth n l (% x n)) (+ (* 10 (nth (- n 1) l)) (/ x n)))))").compile(program, functions);
+    // main loop
+    parse_list("(define mnloop (lambda (l x n) (cond (eq n 1)  (inloop l x n) (1) (begin (define r (inloop l x n)) (mnloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
+    // outer loop
+    parse_list("(define otloop (lambda (l x n) (cond (eq n 10) (print) (1) (begin (define r (mnloop l x n)) (print (cdr r)) (otloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
 
     parse_list("(define l1 (cons 0 (cons 2 (gen1 107))))").compile(program, functions);
-    parse_list("(define l2 (inloop l1 0 108))").compile(program, functions);
+    parse_list("(define l2 (otloop l1 0 108))").compile(program, functions);
     parse_list("(apply prnel (car l2))").compile(program, functions);
-    parse_list("(print (cdr l2))").compile(program, functions);
     parse_list("(print)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
