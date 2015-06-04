@@ -9,6 +9,8 @@
 #include <jit/jit.h>
 #include <jit/jit-dump.h>
 
+#include <signal.h>
+
 using std::cout;
 using std::endl;
 
@@ -124,7 +126,7 @@ struct JitCell
 template<typename T>
 void jit_vm_print_cell(const T cell)
 {
-    if (cell.type == Int) printf("%llu", cell.integer);
+    if (cell.type == Int) cout << cell.integer;
     else if (cell.type == String) cout << cell.string;
     else if (cell.type == Nil) cout << "Nil";
     fflush(stdout);
@@ -161,6 +163,8 @@ struct VM
         jit_value_t memory_ptr;
         jit_value_t env_ptr;
         jit_value_t dbg_ptr;
+        size_t jit_time;
+        size_t execution_time;
     };
 
     VM() : env(nullptr), 
@@ -210,12 +214,15 @@ struct VM
     void run(const std::vector<std::string>& program)
     {
         pc = 0;
+        auto start = std::chrono::steady_clock::now();
         if (ctx) prepare_jump_table(program);
         while (pc < program.size())
         {
             if(ctx) step_jit(program[pc]);
             else step_interpret(program[pc]);
             stack_historic_max_size = stack.size() > stack_historic_max_size ? stack.size() : stack_historic_max_size;
+            auto diff = std::chrono::steady_clock::now() - start;
+            if (!ctx) execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
             if (stop) break;
         }
         if (ctx)
@@ -223,7 +230,11 @@ struct VM
             jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
             jit_function_compile(main);
             jit_int result = 0;
+            jit_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            auto start = std::chrono::steady_clock::now();
             jit_function_apply(main, nullptr, &result);
+            auto diff = std::chrono::steady_clock::now() - start;
+            execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
         }
     }
 
@@ -515,9 +526,11 @@ struct VM
         {
             // cout << "Disassembly:" << endl;
             // jit_dump_function(stdout, main, "program");
-            cout << "Environent pointer: " << jit_env_ptr <<  endl;
-            cout << "Stack size: " << jit_stack_ptr <<  endl;
-            cout << "Memory size: " << jit_memory_ptr <<  endl;
+            cout << "JIT time: " << jit_time << " ms" << endl;
+            cout << "Execution time: " << execution_time<< " ms" << endl;
+            cout << "Environent pointer: " << jit_env_ptr << endl;
+            cout << "Stack size: " << jit_stack_ptr << endl;
+            cout << "Memory size: " << jit_memory_ptr << endl;
             cout << "Stack:" <<  endl;
             for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
@@ -527,6 +540,7 @@ struct VM
         }
         else
         {
+            cout << "Execution time: " << execution_time<< " ms" << endl;
             cout << "VM info" << endl;
             cout << "  PC: " << pc << endl;
             cout << "  Ticks: " << ticks << endl;
@@ -587,24 +601,71 @@ struct VM
         ofs << "}" << endl;
     }
 
-    void gc_recursive(Cell* root)
+    void gc_intepreter_recursive(Cell* root)
     {
         if (!root) return;
         if (root->refcount) return;
         root->refcount++;
-        if (root->type == Lambda) return gc_recursive(root->lambda_env);
-        if (root->type == Pair) { gc_recursive(root->left); gc_recursive(root->right); }
+        if (root->type == Lambda) return gc_intepreter_recursive(root->lambda_env);
+        if (root->type == Pair) { gc_intepreter_recursive(root->left); gc_intepreter_recursive(root->right); }
+    }
+
+    void gc_interpreter()
+    {
+        size_t used = 0;
+        cout << "Garbage collecting: " << memory.size() << " cells" << endl;
+        gc_intepreter_recursive(env);
+        for (auto& x : memory) if (x.refcount) used += 1;
+        cout << "  Found orphaned cells: " << memory.size() - used << endl;
+        cout << "  Found used cells: " << used << endl;
+    }
+
+    void gc_jit_recursive(JitCell& c)
+    {
+        if (c.as64 & 0x80000000000000ull) return;
+        const JitCell tmp = c;
+        c.as64 |= 0x80000000000000ull;
+        if (tmp.type == Lambda) gc_jit_recursive(jit_memory[tmp.lambda_env]);
+        else if (tmp.type == Pair)
+        {
+            gc_jit_recursive(jit_memory[tmp.left]);
+            gc_jit_recursive(jit_memory[tmp.right]);
+        }
+    }
+
+    void gc_jit()
+    {
+        // first gather all the lambdas
+        // std::map<uint32_t, std::vector<JitCell>> lambdas;
+        size_t lambdas_count = 0;
+        // for (int i = 0; i < jit_memory_ptr; ++i)
+        // {
+        //     const JitCell& cell = jit_memory[i];
+        //     if (cell.type == Lambda)
+        //     {
+        //         lambdas[cell.lambda_env].push_back(cell);
+        //         lambdas_count += 1;
+        //     }
+        // }
+        gc_jit_recursive(jit_memory[jit_env_ptr]);
+        size_t used = 0;
+        for (int i = 0; i < jit_memory_ptr; ++i)
+            if (jit_memory[i].as64 & 0x80000000000000ull) 
+            {
+                JitCell tmp = jit_memory[i];
+                tmp.as64 &= 0x7FFFFFFFFFFFFFFFull;
+                if (tmp.type == Lambda) 
+                    lambdas_count += 1;
+                used += 1;
+            }
+        cout << "Gathered " <<  used << " cells" << endl;
+        cout << "Gathered " << lambdas_count << " lambdas" << endl; 
     }
 
     void gc()
     {
-        size_t used = 0;
-        cout << "Garbage collecting: " << memory.size() << " cells" << endl;
-        gc_recursive(env->left);
-        gc_recursive(env->right);
-        for (auto& x : memory) if (x.refcount) used += 1;
-        cout << "  Found orphaned cells: " << memory.size() - used << endl;
-        cout << "  Found used cells: " << used << endl;
+        if (ctx) gc_jit();
+        else gc_interpreter();
     }
 
     void init_jit()
@@ -1017,18 +1078,18 @@ struct VM
     }
 };
 
+VM vm;
+
 int main()
 {    
+    signal(SIGINT, [](int) { vm.debug(); exit(1); });
+
     std::string line;
     std::vector<std::string> program;
     while (std::getline(std::cin, line))
        program.push_back(line);
-    VM vm;
     vm.init_jit();
-    auto start = std::chrono::steady_clock::now();
     vm.run(program);
-    auto diff = std::chrono::steady_clock::now() - start;
-    cout << "Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(diff).count() << " ms" << endl;
     vm.debug();
     vm.gc();
     return 0;    
