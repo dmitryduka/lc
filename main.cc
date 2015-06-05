@@ -847,6 +847,9 @@ int main() {
     parse_list("(print (square 20))").compile(program, functions);
     parse_list("(print)").compile(program, functions);
     parse_list("(gc)").compile(program, functions);
+    parse_list("(print (square 30))").compile(program, functions);
+    parse_list("(print)").compile(program, functions);
+    parse_list("(gc)").compile(program, functions);
     program.push_back("FIN");
     link(program, functions);
     for (auto x : program)

@@ -15,7 +15,7 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 20;
+const size_t MEMORY_SIZE = 50;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer };
 
@@ -169,6 +169,8 @@ struct VM
         jit_value_t dbg_ptr;
         size_t jit_time;
         size_t execution_time;
+        size_t gc_count;
+        size_t gc_collected;
     };
 
     VM() : env(nullptr), 
@@ -179,7 +181,9 @@ struct VM
             stack_historic_max_size(0), 
             ctx(nullptr),
             jit_jump_table_current_index(0),
-            jit_dbg(0)
+            jit_dbg(0),
+            gc_count(0),
+            gc_collected(0)
     { 
     	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
     	memory.push_back(Cell(Pair));
@@ -530,18 +534,20 @@ struct VM
         {
             // cout << "Disassembly:" << endl;
             // jit_dump_function(stdout, main, "program");
+            size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
             cout << "JIT time: " << jit_time << " ms" << endl;
             cout << "Execution time: " << execution_time<< " ms" << endl;
+            cout << "GC ran: " << gc_count << " time(s)" << endl;
+            cout << "  Collected: " << gc_collected << " cells" << endl;
             cout << "Environent pointer: " << jit_env_ptr << endl;
             cout << "Stack size: " << jit_stack_ptr << endl;
-            cout << "Memory size: " << jit_memory_ptr << endl;
+            cout << "Memory size: " << jit_memory_ptr - offset << endl;
             cout << "Stack:" <<  endl;
             for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
             cout << "Memory:" << endl;       
-            size_t offset = (MEMORY_SIZE >> 1); 
-            for (int i = 0; i < jit_memory_ptr; ++i)
-                cout << "    " << jit_memory[offset + i].pp() << endl;
+            for (int i = offset; i < jit_memory_ptr; ++i)
+                cout << "    " << jit_memory[i].pp() << endl;
         }
         else
         {
@@ -638,34 +644,21 @@ struct VM
         }
     }
 
-    void gc_jit_mark()
+    size_t gc_jit_mark()
     {
-        std::map<uint32_t, std::vector<JitCell>> lambdas;
-        size_t lambdas_count = 0, pairs_count = 0, atoms_count = 0, used = 0;
         gc_jit_mark_recursive(jit_memory[jit_env_ptr]);
+        // count used, optional, for stats only
+        size_t used = 0;
         for (int i = 0; i < jit_memory_ptr; ++i)
             if (jit_memory[i].as64 & 0x8000000000000000ull) 
-            {
-                JitCell tmp = jit_memory[i];
-                tmp.as64 &= 0x7FFFFFFFFFFFFFFFull;
-                if (tmp.type == Lambda) 
-                    lambdas_count += 1;
-                if (tmp.type == Pair) 
-                    pairs_count += 1;
-                if (tmp.type == String || tmp.type == Int || tmp.type == Nil) 
-                    atoms_count += 1;
                 used += 1;
-            }
-        cout << "Gathered " <<  used << " cells" << endl;
-        cout << "  " << lambdas_count << " lambdas" << endl; 
-        cout << "  " << pairs_count << " pairs" << endl; 
-        cout << "  " << atoms_count << " atoms" << endl;         
+        return used;
     }
 
     void gc_jit_scavenge()
     {
         size_t new_heap_ptr = 0;
-        const size_t offset = MEMORY_SIZE >> 1;
+        const size_t offset = (gc_count & 1) ? 0 : (MEMORY_SIZE >> 1);
         JitCell* new_heap = &jit_memory[offset], *cur_heap = new_heap;
         for (int i = 0; i < jit_memory_ptr; ++i)
         {
@@ -675,11 +668,10 @@ struct VM
                 // copy the cell clearing 'reachable' bit
                 *cur_heap = cell.as64 & 0x7FFFFFFFFFFFFFFFull;
                 // save relocation info in the old cell, saving 'reachable' bit
-                cell.as64 = (cur_heap - new_heap) & 0x8FFFFFFFFFFFFFFFull;
+                cell.as64 = (cur_heap - new_heap + offset) & 0x8FFFFFFFFFFFFFFFull;
                 cur_heap += 1;
             }
         }
-        // save new mp
         jit_memory_ptr = cur_heap - new_heap;
         // fix relocations
         cur_heap = new_heap;
@@ -696,13 +688,17 @@ struct VM
                 cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
             }
         }
-        // save new heap pointer
+        // save new mp
+        jit_memory_ptr = cur_heap - new_heap + offset;
+        // fix ep
+        jit_env_ptr = jit_memory[jit_env_ptr].as64 & 0x7FFFFFFFFFFFFFFFull;
     }
 
     void gc_jit()
     {
-        gc_jit_mark();
+        gc_collected += gc_jit_mark();
         gc_jit_scavenge();
+        gc_count += 1;
     }
 
     void gc()
