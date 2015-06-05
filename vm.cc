@@ -636,19 +636,9 @@ struct VM
     void gc_jit()
     {
         // first gather all the lambdas
-        // std::map<uint32_t, std::vector<JitCell>> lambdas;
-        size_t lambdas_count = 0;
-        // for (int i = 0; i < jit_memory_ptr; ++i)
-        // {
-        //     const JitCell& cell = jit_memory[i];
-        //     if (cell.type == Lambda)
-        //     {
-        //         lambdas[cell.lambda_env].push_back(cell);
-        //         lambdas_count += 1;
-        //     }
-        // }
+        std::map<uint32_t, std::vector<JitCell>> lambdas;
+        size_t lambdas_count = 0, pairs_count = 0, atoms_count = 0, used = 0;
         gc_jit_recursive(jit_memory[jit_env_ptr]);
-        size_t used = 0;
         for (int i = 0; i < jit_memory_ptr; ++i)
             if (jit_memory[i].as64 & 0x80000000000000ull) 
             {
@@ -656,10 +646,16 @@ struct VM
                 tmp.as64 &= 0x7FFFFFFFFFFFFFFFull;
                 if (tmp.type == Lambda) 
                     lambdas_count += 1;
+                if (tmp.type == Pair) 
+                    pairs_count += 1;
+                if (tmp.type == String || tmp.type == Int || tmp.type == Nil) 
+                    atoms_count += 1;
                 used += 1;
             }
         cout << "Gathered " <<  used << " cells" << endl;
-        cout << "Gathered " << lambdas_count << " lambdas" << endl; 
+        cout << "  " << lambdas_count << " lambdas" << endl; 
+        cout << "  " << pairs_count << " pairs" << endl; 
+        cout << "  " << atoms_count << " atoms" << endl; 
     }
 
     void gc()
