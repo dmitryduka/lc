@@ -15,9 +15,11 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 100000000;
+const size_t MEMORY_SIZE = 20;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer };
+
+struct VM;
 
 std::string type_to_string(CellType type)
 {
@@ -100,6 +102,7 @@ struct JitCell
         };
     } __attribute__((packed));
     JitCell() : as64(0) { }
+    JitCell(uint64_t x) : as64(x) { }
     static JitCell make_integer(int x) { JitCell r; r.type = Int; r.integer = x; return r; }
     static JitCell make_nil() { JitCell r; r.type = Nil; return r; }
     static JitCell make_string(const std::string& x) { 
@@ -128,9 +131,10 @@ void jit_vm_print_cell(const T cell)
 {
     if (cell.type == Int) cout << cell.integer;
     else if (cell.type == String) cout << cell.string;
-    else if (cell.type == Nil) cout << "Nil";
-    fflush(stdout);
+    else if (cell.type == Nil) cout << "Nil" << endl;
 }
+
+void jit_vm_gc(VM* vm);
 
 struct VM
 {
@@ -534,9 +538,10 @@ struct VM
             cout << "Stack:" <<  endl;
             for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
-            // cout << "Memory:" << endl;            
-            // for (int i = 0; i < jit_memory_ptr; ++i)
-            //     cout << "    " << jit_memory[i].pp() << endl;
+            cout << "Memory:" << endl;       
+            size_t offset = (MEMORY_SIZE >> 1); 
+            for (int i = 0; i < jit_memory_ptr; ++i)
+                cout << "    " << jit_memory[offset + i].pp() << endl;
         }
         else
         {
@@ -620,27 +625,26 @@ struct VM
         cout << "  Found used cells: " << used << endl;
     }
 
-    void gc_jit_recursive(JitCell& c)
+    void gc_jit_mark_recursive(JitCell& c)
     {
-        if (c.as64 & 0x80000000000000ull) return;
+        if (c.as64 & 0x8000000000000000ull) return;
         const JitCell tmp = c;
-        c.as64 |= 0x80000000000000ull;
-        if (tmp.type == Lambda) gc_jit_recursive(jit_memory[tmp.lambda_env]);
+        c.as64 |= 0x8000000000000000ull;
+        if (tmp.type == Lambda) gc_jit_mark_recursive(jit_memory[tmp.lambda_env]);
         else if (tmp.type == Pair)
         {
-            gc_jit_recursive(jit_memory[tmp.left]);
-            gc_jit_recursive(jit_memory[tmp.right]);
+            gc_jit_mark_recursive(jit_memory[tmp.left]);
+            gc_jit_mark_recursive(jit_memory[tmp.right]);
         }
     }
 
-    void gc_jit()
+    void gc_jit_mark()
     {
-        // first gather all the lambdas
         std::map<uint32_t, std::vector<JitCell>> lambdas;
         size_t lambdas_count = 0, pairs_count = 0, atoms_count = 0, used = 0;
-        gc_jit_recursive(jit_memory[jit_env_ptr]);
+        gc_jit_mark_recursive(jit_memory[jit_env_ptr]);
         for (int i = 0; i < jit_memory_ptr; ++i)
-            if (jit_memory[i].as64 & 0x80000000000000ull) 
+            if (jit_memory[i].as64 & 0x8000000000000000ull) 
             {
                 JitCell tmp = jit_memory[i];
                 tmp.as64 &= 0x7FFFFFFFFFFFFFFFull;
@@ -655,7 +659,50 @@ struct VM
         cout << "Gathered " <<  used << " cells" << endl;
         cout << "  " << lambdas_count << " lambdas" << endl; 
         cout << "  " << pairs_count << " pairs" << endl; 
-        cout << "  " << atoms_count << " atoms" << endl; 
+        cout << "  " << atoms_count << " atoms" << endl;         
+    }
+
+    void gc_jit_scavenge()
+    {
+        size_t new_heap_ptr = 0;
+        const size_t offset = MEMORY_SIZE >> 1;
+        JitCell* new_heap = &jit_memory[offset], *cur_heap = new_heap;
+        for (int i = 0; i < jit_memory_ptr; ++i)
+        {
+            JitCell& cell = jit_memory[i];
+            if (cell.as64 & 0x8000000000000000ull)
+            {
+                // copy the cell clearing 'reachable' bit
+                *cur_heap = cell.as64 & 0x7FFFFFFFFFFFFFFFull;
+                // save relocation info in the old cell, saving 'reachable' bit
+                cell.as64 = (cur_heap - new_heap) & 0x8FFFFFFFFFFFFFFFull;
+                cur_heap += 1;
+            }
+        }
+        // save new mp
+        jit_memory_ptr = cur_heap - new_heap;
+        // fix relocations
+        cur_heap = new_heap;
+        for (int i = 0; i < jit_memory_ptr; ++i)
+        {
+            JitCell& cell = *cur_heap++;
+            if (cell.type == Pair)
+            {
+                cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
+            }
+            else if (cell.type == Lambda)
+            {
+                cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
+            }
+        }
+        // save new heap pointer
+    }
+
+    void gc_jit()
+    {
+        gc_jit_mark();
+        gc_jit_scavenge();
     }
 
     void gc()
@@ -749,6 +796,16 @@ struct VM
         const std::string op = tokens[0];
         
         if (op == "FIN") jit_insn_return(main, nullptr);
+        else if (op == "GC")
+        {
+            jit_type_t type[] = { jit_type_void_ptr };
+            jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, type, 1, 1);
+            jit_constant_t val_const;
+            val_const.type = jit_type_void_ptr;
+            val_const.un.ptr_value = this; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
+            jit_value_t val = jit_value_create_constant(main, &val_const);
+            jit_insn_call_native(main, "gc", reinterpret_cast<void*>(&jit_vm_gc), signature, &val, 1, JIT_CALL_NOTHROW);    
+        }
         else if (op == "PRN" || op == "PRNL")
         {
             jit_type_t type[] = { jit_type_ulong };
@@ -1074,6 +1131,8 @@ struct VM
     }
 };
 
+void jit_vm_gc(VM* vm) { vm->gc_jit(); }
+
 VM vm;
 
 int main()
@@ -1087,7 +1146,6 @@ int main()
     vm.init_jit();
     vm.run(program);
     vm.debug();
-    vm.gc();
     return 0;    
 }
 
