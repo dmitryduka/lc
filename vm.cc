@@ -15,9 +15,9 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 50;
+const size_t MEMORY_SIZE = 200000;
 
-enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer };
+enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment };
 
 struct VM;
 
@@ -28,6 +28,8 @@ std::string type_to_string(CellType type)
     else if (type == String) return "String";
     else if (type == Lambda) return "Lambda";
     else if (type == Nil) return "Nil";
+    else if (type == InstructionPointer) return "InstructionPointer (Call)";
+    else if (type == Environment) return "Environment (Call)";
     return "Unknown";
 }
 
@@ -539,15 +541,15 @@ struct VM
             cout << "Execution time: " << execution_time<< " ms" << endl;
             cout << "GC ran: " << gc_count << " time(s)" << endl;
             cout << "  Collected: " << gc_collected << " cells" << endl;
-            cout << "Environent pointer: " << jit_env_ptr << endl;
+            cout << "Environment pointer: " << jit_env_ptr << endl;
             cout << "Stack size: " << jit_stack_ptr << endl;
             cout << "Memory size: " << jit_memory_ptr - offset << endl;
             cout << "Stack:" <<  endl;
             for (int i = jit_stack_ptr - 1; i >= 0; --i)
                 cout << "    " << jit_stack[i].pp() << endl;
-            cout << "Memory:" << endl;       
-            for (int i = offset; i < jit_memory_ptr; ++i)
-                cout << "    " << jit_memory[i].pp() << endl;
+            // cout << "Memory:" << endl;       
+            // for (int i = offset; i < jit_memory_ptr; ++i)
+            //     cout << "    " << jit_memory[i].pp() << endl;
         }
         else
         {
@@ -642,25 +644,35 @@ struct VM
             gc_jit_mark_recursive(jit_memory[tmp.left]);
             gc_jit_mark_recursive(jit_memory[tmp.right]);
         }
+        else if (tmp.type == Environment)
+        {
+            gc_jit_mark_recursive(jit_memory[tmp.as64 & 0x0FFFFFFFFFFFFFFFull]);
+        }
     }
 
     size_t gc_jit_mark()
     {
         gc_jit_mark_recursive(jit_memory[jit_env_ptr]);
+        for (int i = 0; i < jit_stack_ptr - 1; ++i)
+            gc_jit_mark_recursive(jit_stack[i]);
+        for (int i = 0; i < jit_stack_ptr - 1; ++i)
+            jit_stack[i].as64 &= 0x7FFFFFFFFFFFFFFFull;
         // count used, optional, for stats only
-        size_t used = 0;
-        for (int i = 0; i < jit_memory_ptr; ++i)
-            if (jit_memory[i].as64 & 0x8000000000000000ull) 
-                used += 1;
-        return used;
+        size_t unused = 0;
+        const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
+        for (int i = offset; i < jit_memory_ptr; ++i)
+            if ((jit_memory[i].as64 & 0x8000000000000000ull) == 0) 
+                unused += 1;
+        return unused;
     }
 
     void gc_jit_scavenge()
     {
         size_t new_heap_ptr = 0;
         const size_t offset = (gc_count & 1) ? 0 : (MEMORY_SIZE >> 1);
+        const size_t source_offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
         JitCell* new_heap = &jit_memory[offset], *cur_heap = new_heap;
-        for (int i = 0; i < jit_memory_ptr; ++i)
+        for (int i = source_offset; i < jit_memory_ptr; ++i)
         {
             JitCell& cell = jit_memory[i];
             if (cell.as64 & 0x8000000000000000ull)
@@ -675,6 +687,25 @@ struct VM
         jit_memory_ptr = cur_heap - new_heap;
         // fix relocations
         cur_heap = new_heap;
+        // stack
+        for (int i = 0; i < jit_stack_ptr; ++i)
+        {
+            JitCell& cell = *cur_heap++;
+            if (cell.type == Pair)
+            {
+                cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
+            }
+            else if (cell.type == Lambda)
+            {
+                cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
+            }
+            else if (cell.type == Environment)
+            {
+                cell.as64 = jit_memory[cell.as64].as64 & 0x7FFFFFFFFFFFFFFFull;
+            }
+        }
+        // heap
         for (int i = 0; i < jit_memory_ptr; ++i)
         {
             JitCell& cell = *cur_heap++;
@@ -1067,14 +1098,16 @@ struct VM
             jit_value_t lambda_addr = jit_insn_and(main, lambda, jit_value_create_long_constant(main, jit_type_ulong, 0x00000000FFFFFFFFull));
             jit_value_t lambda_env = jit_insn_and(main, lambda, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFF00000000ull));
             lambda_env = jit_insn_shr(main, lambda_env, jit_value_create_nint_constant(main, jit_type_uint, 32));
-            // push env
-            jit_insn_store_relative(main, l_addr, 0, 
-                                                jit_insn_convert(main, 
+            // push env, setting cell type to Environment
+            jit_value_t env = jit_insn_convert(main, 
                                                     jit_insn_load_relative(main, env_ptr, 0, jit_type_uint), 
-                                                    jit_type_ulong, 0));
-            // push ip
-            jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
-                                          jit_value_create_long_constant(main, jit_type_ulong, jit_jump_map[pc + 1]));
+                                                    jit_type_ulong, 0);
+            env = jit_insn_or(main, env, jit_value_create_long_constant(main, jit_type_ulong, 0x6000000000000000ull));
+            jit_insn_store_relative(main, l_addr, 0, env);
+            // push ip, setting cell type to InstructionPointer
+            jit_value_t ip = jit_value_create_long_constant(main, jit_type_ulong, jit_jump_map[pc + 1]);
+            ip = jit_insn_or(main, ip, jit_value_create_long_constant(main, jit_type_ulong, 0x5000000000000000ull));
+            jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, ip);
             // load lambda's env
             jit_insn_store_relative(main, env_ptr, 0, lambda_env);
             // we popped lambda object and pushed env + pc
@@ -1088,12 +1121,14 @@ struct VM
             jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp2 = jit_insn_add(main, sp, cm2);
-            // load pc
+            // load pc, clearing its type
             jit_value_t pc_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t pc = jit_insn_convert(main, jit_insn_load_relative(main, pc_addr, 0, jit_type_ulong), jit_type_uint, 0);
-            // load env
+            pc = jit_insn_and(main, pc, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
+            // load env, clearing its type
             jit_value_t env_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp2, c8));
             jit_value_t env = jit_insn_load_relative(main, env_addr, 0, jit_type_ulong);
+            env = jit_insn_and(main, env, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
             // set env
             jit_insn_store_relative(main, env_ptr, 0, jit_insn_convert(main, env, jit_type_uint, 0));
             // we popped env + pc
