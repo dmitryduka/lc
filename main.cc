@@ -505,6 +505,7 @@ void Cell::compile(std::vector<std::string>& program,
             else if (list[0].name == "gc")
             {
                 program.push_back("GC");      
+                program.push_back("PUSHNIL");
             }
             else if (list[0].name == "print")
             {
