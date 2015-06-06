@@ -15,7 +15,7 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 200000;
+const size_t MEMORY_SIZE = 1700000;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment };
 
@@ -131,8 +131,8 @@ struct JitCell
 template<typename T>
 void jit_vm_print_cell(const T cell)
 {
-    if (cell.type == Int) cout << cell.integer;
-    else if (cell.type == String) cout << cell.string;
+    if (cell.type == Int) cout << cell.integer << std::flush;
+    else if (cell.type == String) cout << cell.string << std::flush;
     else if (cell.type == Nil) cout << "Nil" << endl;
 }
 
@@ -653,9 +653,9 @@ struct VM
     size_t gc_jit_mark()
     {
         gc_jit_mark_recursive(jit_memory[jit_env_ptr]);
-        for (int i = 0; i < jit_stack_ptr - 1; ++i)
+        for (int i = 0; i < jit_stack_ptr; ++i)
             gc_jit_mark_recursive(jit_stack[i]);
-        for (int i = 0; i < jit_stack_ptr - 1; ++i)
+        for (int i = 0; i < jit_stack_ptr; ++i)
             jit_stack[i].as64 &= 0x7FFFFFFFFFFFFFFFull;
         // count used, optional, for stats only
         size_t unused = 0;
@@ -688,23 +688,23 @@ struct VM
         // fix relocations
         cur_heap = new_heap;
         // stack
-        for (int i = 0; i < jit_stack_ptr; ++i)
-        {
-            JitCell& cell = *cur_heap++;
-            if (cell.type == Pair)
-            {
-                cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
-                cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
-            }
-            else if (cell.type == Lambda)
-            {
-                cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
-            }
-            else if (cell.type == Environment)
-            {
-                cell.as64 = jit_memory[cell.as64].as64 & 0x7FFFFFFFFFFFFFFFull;
-            }
-        }
+        // for (int i = 0; i < jit_stack_ptr; ++i)
+        // {
+        //     JitCell& cell = jit_stack[i];
+        //     if (cell.type == Pair)
+        //     {
+        //         cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
+        //         cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
+        //     }
+        //     else if (cell.type == Lambda)
+        //     {
+        //         cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
+        //     }
+        //     else if (cell.type == Environment)
+        //     {
+        //         cell.as64 = jit_memory[cell.as64].as64 & 0x7FFFFFFFFFFFFFFFull;
+        //     }
+        // }
         // heap
         for (int i = 0; i < jit_memory_ptr; ++i)
         {
@@ -727,7 +727,8 @@ struct VM
 
     void gc_jit()
     {
-        gc_collected += gc_jit_mark();
+        size_t unused = gc_jit_mark();
+        gc_collected += unused;
         gc_jit_scavenge();
         gc_count += 1;
     }
