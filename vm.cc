@@ -15,7 +15,7 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 60000;
+const size_t MEMORY_SIZE = 100000;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment };
 
@@ -157,8 +157,7 @@ struct VM
     uint32_t jit_env_ptr;
     std::map<size_t, size_t> jit_jump_map;
     std::vector<jit_label_t> jit_jump_table;
-    size_t jit_jump_table_current_index;
-    uint64_t jit_dbg;
+    uint32_t jit_jump_table_current_index;
     struct
     {
         jit_context_t ctx;
@@ -168,11 +167,11 @@ struct VM
         jit_value_t memory_addr;
         jit_value_t memory_ptr;
         jit_value_t env_ptr;
-        jit_value_t dbg_ptr;
+        jit_value_t gc_count_ptr;
         size_t jit_time;
         size_t execution_time;
-        size_t gc_count;
-        size_t gc_collected;
+        uint32_t gc_count;
+        uint32_t gc_collected;
     };
 
     VM() : env(nullptr), 
@@ -183,7 +182,6 @@ struct VM
             stack_historic_max_size(0), 
             ctx(nullptr),
             jit_jump_table_current_index(0),
-            jit_dbg(0),
             gc_count(0),
             gc_collected(0)
     { 
@@ -214,11 +212,6 @@ struct VM
         std::string s;    
         while (getline(f, s, ' ')) strings.push_back(s);
         return strings;
-    }
-
-    void jit_debug(jit_value_t v)
-    {
-        jit_insn_store_relative(main, dbg_ptr, 0, v);
     }
 
     void run(const std::vector<std::string>& program)
@@ -766,15 +759,16 @@ struct VM
         memory_ptr_const.un.ptr_value = &jit_memory_ptr;
         memory_ptr = jit_value_create_constant(main, &memory_ptr_const);
         // bind jit dbg var
-        jit_constant_t dbg_ptr_const;
-        dbg_ptr_const.type = jit_type_void_ptr;
-        dbg_ptr_const.un.ptr_value = &jit_dbg;
-        dbg_ptr = jit_value_create_constant(main, &dbg_ptr_const);
+        jit_constant_t gc_count_ptr_const;
+        gc_count_ptr_const.type = jit_type_void_ptr;
+        gc_count_ptr_const.un.ptr_value = &gc_count;
+        gc_count_ptr = jit_value_create_constant(main, &gc_count_ptr_const);
         // bind jit env var
         jit_constant_t env_ptr_const;
         env_ptr_const.type = jit_type_void_ptr;
         env_ptr_const.un.ptr_value = &jit_env_ptr;
         env_ptr = jit_value_create_constant(main, &env_ptr_const);
+        // create default env
         jit_memory[1] = JitCell::make_pair(0, 0);
     }
 
@@ -804,6 +798,8 @@ struct VM
     void step_jit(const std::string& instruction)
     {
         auto tokens = tokenize(instruction);
+        if (tokens.empty()) return;
+
         static jit_value_t c8 = jit_value_create_nint_constant(main, jit_type_uint, 8);
         static jit_value_t c2 = jit_value_create_nint_constant(main, jit_type_uint, 2);
         static jit_value_t c1 = jit_value_create_nint_constant(main, jit_type_uint, 1);
@@ -811,13 +807,39 @@ struct VM
         static jit_value_t cm2 = jit_value_create_nint_constant(main, jit_type_int, -2);
         static jit_value_t ctypemask = jit_value_create_long_constant(main, jit_type_ulong, 0xF000000000000000l);
         static jit_value_t cdatamask = jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFl);
+        static jit_value_t cmemthreshold = jit_value_create_nint_constant(main, jit_type_uint, (MEMORY_SIZE >> 1) - 3);
+
+        const std::string op = tokens[0];
+
+        // for operations allocating heap space, check if we need to start GC
+        if (op == "CONS" || op == "DEF" || op == "STOREENV")
+        {
+            jit_label_t run_gc = jit_label_undefined, 
+                        no_gc = jit_label_undefined,
+                        first_half = jit_label_undefined;
+            jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_uint);
+            jit_value_t gcc = jit_insn_load_relative(main, gc_count_ptr, 0, jit_type_uint);
+            gcc = jit_insn_eq(main, jit_insn_and(main, gcc, c1), c1);
+            jit_insn_branch_if_not(main, gcc, &first_half);
+            mp = jit_insn_sub(main, mp, jit_value_create_nint_constant(main, jit_type_uint, MEMORY_SIZE >> 1));
+            jit_insn_label(main, &first_half);
+            jit_value_t needs_gc = jit_insn_gt(main, mp, cmemthreshold);
+            jit_insn_branch_if(main, needs_gc, &run_gc);
+            jit_insn_branch(main, &no_gc);
+            jit_insn_label(main, &run_gc);
+            jit_type_t type[] = { jit_type_void_ptr };
+            jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, type, 1, 1);
+            jit_constant_t val_const;
+            val_const.type = jit_type_void_ptr;
+            val_const.un.ptr_value = this;
+            jit_value_t val = jit_value_create_constant(main, &val_const);
+            jit_insn_call_native(main, "gc", reinterpret_cast<void*>(&jit_vm_gc), signature, &val, 1, JIT_CALL_NOTHROW);    
+            jit_insn_label(main, &no_gc);
+        }
 
         // insert label in case this is the target of a jump or instruction next to a call
         if (jit_jump_map.count(pc))
             jit_insn_label(main, &jit_jump_table[jit_jump_map[pc]]);
-
-        if (tokens.empty()) return;
-        const std::string op = tokens[0];
         
         if (op == "FIN") jit_insn_return(main, nullptr);
         else if (op == "GC")
@@ -826,7 +848,7 @@ struct VM
             jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, type, 1, 1);
             jit_constant_t val_const;
             val_const.type = jit_type_void_ptr;
-            val_const.un.ptr_value = this; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
+            val_const.un.ptr_value = this;
             jit_value_t val = jit_value_create_constant(main, &val_const);
             jit_insn_call_native(main, "gc", reinterpret_cast<void*>(&jit_vm_gc), signature, &val, 1, JIT_CALL_NOTHROW);    
         }
