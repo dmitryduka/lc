@@ -15,7 +15,7 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 1700000;
+const size_t MEMORY_SIZE = 60000;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment };
 
@@ -688,23 +688,19 @@ struct VM
         // fix relocations
         cur_heap = new_heap;
         // stack
-        // for (int i = 0; i < jit_stack_ptr; ++i)
-        // {
-        //     JitCell& cell = jit_stack[i];
-        //     if (cell.type == Pair)
-        //     {
-        //         cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
-        //         cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
-        //     }
-        //     else if (cell.type == Lambda)
-        //     {
-        //         cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
-        //     }
-        //     else if (cell.type == Environment)
-        //     {
-        //         cell.as64 = jit_memory[cell.as64].as64 & 0x7FFFFFFFFFFFFFFFull;
-        //     }
-        // }
+        for (int i = 0; i < jit_stack_ptr; ++i)
+        {
+            JitCell& cell = jit_stack[i];
+            if (cell.type == Pair)
+            {
+                cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
+            }
+            else if (cell.type == Lambda)
+                cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
+            else if (cell.type == Environment)
+                cell.as64 = (jit_memory[cell.as64 & 0x7FFFFFFFFFFFFFFFull].as64) | 0x6000000000000000ull;
+        }
         // heap
         for (int i = 0; i < jit_memory_ptr; ++i)
         {
