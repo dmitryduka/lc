@@ -43,39 +43,6 @@ std::string data_to_string(const T& x)
     return "Unknown";
 }
 
-struct Cell
-{
-    CellType type;
-    char refcount;
-    union {
-        char      string[8];
-        int       integer;
-        struct {
-            uint32_t  lambda_addr;
-            Cell*     lambda_env;
-        };
-        struct {
-            Cell* left;
-            Cell* right;
-        };
-    };
-
-    Cell(CellType x) : type(x), refcount(0), left(nullptr), right(nullptr) {}
-    std::string pp() { return type_to_string(type) + ": " + data_to_string(*this); }
-
-    static Cell make_integer(int x) { Cell c(Int); c.integer = x; return c; }
-    static Cell make_lambda(size_t x) { Cell c(Lambda); c.lambda_addr = x; return c; }
-    static Cell make_nil() { return Cell(Nil); }
-    static Cell make_string(const char* x) { 
-        Cell c(String);
-        for (int i = 0; i < sizeof(string) - 1; ++i)
-            if (x[i]) c.string[i] = x[i];
-            else break;
-        return c; 
-    }
-    static Cell make_pair(Cell* left, Cell* right) { Cell c(Pair); c.left = left; c.right = right; return c; }
-} __attribute__((packed));
-
 struct JitCell
 {
     struct
@@ -128,8 +95,7 @@ struct JitCell
     std::string pp() { return type_to_string(static_cast<CellType>(type)) + " : " + data_to_string(*this); }
 }  __attribute__((packed));
 
-template<typename T>
-void jit_vm_print_cell(const T cell)
+void jit_vm_print_cell(const JitCell& cell)
 {
     if (cell.type == Int) cout << cell.integer << std::flush;
     else if (cell.type == String) cout << cell.string << std::flush;
@@ -140,43 +106,35 @@ void jit_vm_gc(VM* vm);
 
 struct VM
 {
-    // interpreter variables
-    std::vector<Cell> stack;
-    std::vector<Cell> memory;
-    Cell* env;
-    Cell nil;
+    // VM vars
+    std::vector<JitCell> stack;
+    std::vector<JitCell> heap;
+    uint32_t stack_ptr;
+    uint32_t heap_ptr;
+    uint32_t env_ptr;
     bool stop;
+    // stat
     int pc;
     int ticks;
     int stack_historic_max_size;
-    // jit environment variables
-    std::vector<JitCell> jit_stack;
-    std::vector<JitCell> jit_memory;
-    uint32_t jit_stack_ptr;
-    uint32_t jit_memory_ptr;
-    uint32_t jit_env_ptr;
+    size_t jit_time;
+    size_t execution_time;
+    uint32_t gc_count;
+    uint32_t gc_collected;
+    // jit
+    jit_context_t ctx;
+    jit_function_t main;
+    jit_value_t jit_stack_addr;
+    jit_value_t jit_stack_ptr;
+    jit_value_t jit_memory_addr;
+    jit_value_t jit_memory_ptr;
+    jit_value_t jit_env_ptr;
+    jit_value_t jit_gc_count_ptr;
     std::map<size_t, size_t> jit_jump_map;
     std::vector<jit_label_t> jit_jump_table;
     uint32_t jit_jump_table_current_index;
-    struct
-    {
-        jit_context_t ctx;
-        jit_function_t main;
-        jit_value_t stack_addr;
-        jit_value_t stack_ptr;
-        jit_value_t memory_addr;
-        jit_value_t memory_ptr;
-        jit_value_t env_ptr;
-        jit_value_t gc_count_ptr;
-        size_t jit_time;
-        size_t execution_time;
-        uint32_t gc_count;
-        uint32_t gc_collected;
-    };
 
-    VM() : env(nullptr), 
-            nil(Cell::make_nil()), 
-            stop(false), 
+    VM() :  stop(false), 
             pc(0), 
             ticks(0), 
             stack_historic_max_size(0), 
@@ -185,9 +143,9 @@ struct VM
             gc_count(0),
             gc_collected(0)
     { 
-    	stack.reserve(STACK_SIZE); memory.reserve(MEMORY_SIZE);
-    	memory.push_back(Cell(Pair));
-    	env = &memory[memory.size() - 1];
+    	stack.reserve(STACK_SIZE); 
+        heap.reserve(MEMORY_SIZE);
+    	env_ptr  = 1;
     }
 
     ~VM()
@@ -198,8 +156,12 @@ struct VM
     int get_env_size() 
     { 
         int c = 0; 
-        Cell* cur = env; 
-        while (cur->left && cur->left->left) { cur = cur->right; c++; } 
+        JitCell* cur = &heap[env_ptr]; 
+        while (1) { 
+            if (heap[cur->left].as64 == 0) break;
+            cur = &heap[cur->right]; 
+            c++; 
+        } 
         return c; 
     }
 
@@ -249,425 +211,318 @@ struct VM
         const std::string op = tokens[0];
         if (op == "PRN")
         {
-            if (stack.size() < 1) return panic(op, "Not enough elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
+            if (stack_ptr < 1) return panic(op, "Not enough elements on the stack");
+            JitCell x = stack[stack_ptr - 1];
+            stack_ptr -= 1;
             jit_vm_print_cell(x);
         }
         else if (op == "PRNL")
         {
-            jit_vm_print_cell(Cell::make_string("\n"));
+            jit_vm_print_cell(JitCell::make_string("\n"));
         }
         else if (op == "PUSHCI")
         {
-            stack.push_back(Cell::make_integer(std::stoi(tokens[1])));
+            stack[stack_ptr] = JitCell::make_integer(std::stoi(tokens[1]));
+            stack_ptr += 1;
         }
         else if (op == "PUSHS")
         {
-            stack.push_back(Cell::make_string(tokens[1].c_str()));
+            stack[stack_ptr] = JitCell::make_string(tokens[1].c_str());
+            stack_ptr += 1;
         }
-        else if (op == "ADD")
+        else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "MOD")
         {
-            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
+            if (stack_ptr < 2) return panic(op, "Not enough elements on the stack");
+            JitCell x = stack[stack_ptr - 1];
+            JitCell y = stack[stack_ptr - 2];
+            stack_ptr -= 2;
             if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
-            stack.push_back(Cell::make_integer(y.integer + x.integer));
-        }
-        else if (op == "SUB")
-        {
-            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
-            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
-            stack.push_back(Cell::make_integer(y.integer - x.integer));
-        }
-        else if (op == "MUL")
-        {
-            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
-            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
-            stack.push_back(Cell::make_integer(y.integer * x.integer));
-        }
-        else if (op == "DIV")
-        {
-            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
-            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
-            stack.push_back(Cell::make_integer(y.integer / x.integer));
-        }
-        else if (op == "MOD")
-        {
-            if (stack.size() < 2) return panic(op, "Not enough elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
-            if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
-            stack.push_back(Cell::make_integer(y.integer % x.integer));
+            if (op == "ADD") stack[stack_ptr++] = JitCell::make_integer(y.integer + x.integer);
+            else if (op == "SUB") stack[stack_ptr++] = JitCell::make_integer(y.integer - x.integer);
+            else if (op == "MUL") stack[stack_ptr++] = JitCell::make_integer(y.integer * x.integer);
+            else if (op == "DIV") stack[stack_ptr++] = JitCell::make_integer(y.integer / x.integer);
+            else if (op == "MOD") stack[stack_ptr++] = JitCell::make_integer(y.integer % x.integer);
         }
         else if (op == "DEF")
         {
-            if (stack.empty()) return panic(op, "Not enough elements on the stack");
-            Cell xy = stack.back(); stack.pop_back();
-            memory.push_back(xy);
-           	memory.push_back(*env);
-           	env->right = &memory.back(); 
-           	env->left = &memory[memory.size() - 2];
-            stack.push_back(*xy.left);
+            if (!stack_ptr) return panic(op, "Not enough elements on the stack");
+            JitCell xy = stack[stack_ptr - 1];
+            stack_ptr -= 1;
+            heap[heap_ptr] = xy;
+           	heap[heap_ptr + 1] = heap[env_ptr];
+            heap_ptr += 2;
+            heap[env_ptr].right = heap_ptr - 1;
+            heap[env_ptr].left = heap_ptr - 2;
+            stack[stack_ptr] = heap[heap_ptr - 2];
         }
         else if (op == "LOADENV")
         {
-            stack.push_back(*env);
+            stack[stack_ptr++] = heap[env_ptr];
         }
         else if (op == "STOREENV")
         {
-            if (stack.empty()) panic(op, "Not enough elements on the stack");
+            if (!stack_ptr) panic(op, "Not enough elements on the stack");
             // migrate env from stack to memory
-            Cell e = stack.back(); stack.pop_back();
-            memory.push_back(e);
-            env = &memory[memory.size() - 1];
+            heap[heap_ptr++] = stack[--stack_ptr];
+            env_ptr = heap_ptr - 1;
         }
         else if (op == "CONS")
         {
-            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");            
+            if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");            
             // migrate left and right from stack to memory
-            const Cell x = stack.back(); stack.pop_back();
-            const Cell y = stack.back(); stack.pop_back();
-            if (x.type != Nil) memory.push_back(x); 
-            if (y.type != Nil) memory.push_back(y); 
-            const size_t memsize = memory.size();
-            Cell* right = y.type != Nil ? &memory[memsize - 1] : &nil;
-            Cell* left =  x.type != Nil ? (y.type != Nil ? &memory[memsize - 2] : &memory[memsize - 1]) : &nil;
-            stack.push_back(Cell::make_pair(left, right));            
+            const JitCell x = stack[stack_ptr - 1];
+            const JitCell y = stack[stack_ptr - 2];
+            stack_ptr -= 2;
+            heap[heap_ptr] = x; 
+            heap[heap_ptr + 1] = y;
+            heap_ptr += 2;
+            stack[stack_ptr++] = JitCell::make_pair(heap_ptr - 2, heap_ptr - 1);
         }
-        else if (op == "PUSHCAR")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            //if (stack.back().type != Pair) return panic(op, "Type mismatch");
-            if (stack.back().type == Int || 
-                stack.back().type == String ||
-                stack.back().type == Nil)                 
-                stack.push_back(stack.back());
-            if (stack.back().left)
-                stack.push_back(*stack.back().left);
-            else
-                stack.push_back(Cell::make_nil());
-        }
-        else if (op == "PUSHCDR")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            //if (stack.back().type != Pair) return panic(op, "Type mismatch");
-            if (stack.back().type == Int || 
-                stack.back().type == String ||
-                stack.back().type == Nil)                 
-                stack.push_back(Cell::make_nil());
-            if (stack.back().right)
-                stack.push_back(*stack.back().right);
-            else
-                stack.push_back(Cell::make_nil());
-        }
-        else if (op == "EQ")
-        {
-            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
-            if (x.type != y.type) return panic(op, "Type mismatch");
-            if (x.type == Int)
-            {
-                if (x.integer == y.integer) stack.push_back(Cell::make_integer(1));
-                else stack.push_back(Cell::make_integer(0));
-            }
-            else if (x.type == String)
-            {
-                if (std::string(x.string) == std::string(y.string)) 
-                    stack.push_back(Cell::make_integer(1));
-                else stack.push_back(Cell::make_integer(0));
-            }
-            else if (x.type == Nil)
-                stack.push_back(Cell::make_integer(1));
-            else if (x.type == Lambda)
-            {
-                if (x.lambda_addr == y.lambda_addr) stack.push_back(Cell::make_integer(1));
-                else stack.push_back(Cell::make_integer(0));
-            }
-            else return panic(op, "Comparing pairs is not supported");
-        }
-        else if (op == "LT")
-        {
-            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-            Cell x = stack.back(); stack.pop_back();
-            Cell y = stack.back(); stack.pop_back();
-            if (x.type != y.type) return panic(op, "Type mismatch");
-            if (x.type == Int)
-            {
-                if (y.integer < x.integer) stack.push_back(Cell::make_integer(1));
-                else stack.push_back(Cell::make_integer(0));
-            }
-            else return panic(op, "Type mismatch");
-        }
-        else if (op == "EQT")
-        {
-            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-            Cell& x = stack[stack.size() - 1];
-            Cell& y = stack[stack.size() - 2];
-            if (x.type == y.type) stack.push_back(Cell::make_integer(1));
-            else stack.push_back(Cell::make_integer(0));            
-        }
-        else if (op == "EQSI")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != String) return panic(op, "Type mismatch");
-            stack.push_back(Cell::make_integer(tokens[1] == stack.back().string ? 1 : 0));            
-        }
-        else if (op == "RJNZ")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Int) return panic(op, "Type mismatch");
-            if (stack.back().integer)
-            {
-                pc += std::stoi(tokens[1]);
-                dont_step_pc = true;
-            }
-        }
-        else if (op == "RJZ")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Int) return panic(op, "Type mismatch");
-            if (!stack.back().integer)
-            {
-                pc += std::stoi(tokens[1]);
-                dont_step_pc = true;
-            }
-        }
-        else if (op == "RJMP")
-        {
-            pc += std::stoi(tokens[1]);
-            dont_step_pc = true;
-        }
-        else if (op == "JMP")
-        {
-            pc = std::stoi(tokens[1]);
-            dont_step_pc = true;
-        }
-        else if (op == "PUSHNIL")
-        {
-            stack.push_back(Cell::make_nil());
-        }
-        else if (op == "PUSHPC")
-        {
-            stack.push_back(Cell::make_integer(pc));
-        }
-        else if (op == "PUSHL")
-        {
-            Cell l = Cell::make_lambda(std::stoi(tokens[1]));
-            l.lambda_env = env;
-            stack.push_back(l);
-        }
-        else if (op == "PUSHFS")
-        {
-            stack.push_back(stack[stack.size() - std::stoi(tokens[1]) - 1]);
-        }
-        else if (op == "FIN")
-        {
-            stop = true;
-        }
-        else if (op == "CALL")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Lambda) return panic(op, "Type mismatch");
-            int old_pc = pc;
-            pc = stack.back().lambda_addr;
-            Cell oldenv = *env;
-            if (stack.back().lambda_env) env = stack.back().lambda_env;
-            else return panic(op, "Lambda has no bound env");
-            stack.pop_back();            
-            stack.push_back(Cell::make_integer(old_pc + 1));
-            stack.push_back(oldenv);
-            dont_step_pc = true;                        
-        }
-        else if (op == "RET")
-        {
-            // migrate env from stack to memory
-            Cell e = stack.back(); stack.pop_back();
-            memory.push_back(e);
-            env = &memory.back();
-            pc = stack.back().integer; stack.pop_back();
-            dont_step_pc = true;
-        }
-        else if (op == "POP")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            stack.pop_back();
-        }
-        else if (op == "CAR")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Pair) return panic(op, "Type mismatch");
-            stack.back() = *stack.back().left;
-        }
-        else if (op == "CDR")
-        {
-            if (stack.empty()) return panic(op, "Empty stack");
-            if (stack.back().type != Pair) return panic(op, "Type mismatch");
-            stack.back() = *stack.back().right;
-        }
-        else if (op == "SWAP")
-        {
-            // TODO: check swap argument and issue panic in case needed
-            if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-            Cell tmp = stack.back();
-            stack.back() = stack[stack.size() - 2 - std::stoi(tokens[1])];
-            stack[stack.size() - 2 - std::stoi(tokens[1])] = tmp;
-        }
+        // else if (op == "PUSHCAR")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     //if (stack.back().type != Pair) return panic(op, "Type mismatch");
+        //     if (stack.back().type == Int || 
+        //         stack.back().type == String ||
+        //         stack.back().type == Nil)                 
+        //         stack.push_back(stack.back());
+        //     if (stack.back().left)
+        //         stack.push_back(*stack.back().left);
+        //     else
+        //         stack.push_back(Cell::make_nil());
+        // }
+        // else if (op == "PUSHCDR")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     //if (stack.back().type != Pair) return panic(op, "Type mismatch");
+        //     if (stack.back().type == Int || 
+        //         stack.back().type == String ||
+        //         stack.back().type == Nil)                 
+        //         stack.push_back(Cell::make_nil());
+        //     if (stack.back().right)
+        //         stack.push_back(*stack.back().right);
+        //     else
+        //         stack.push_back(Cell::make_nil());
+        // }
+        // else if (op == "EQ")
+        // {
+        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+        //     Cell x = stack.back(); stack.pop_back();
+        //     Cell y = stack.back(); stack.pop_back();
+        //     if (x.type != y.type) return panic(op, "Type mismatch");
+        //     if (x.type == Int)
+        //     {
+        //         if (x.integer == y.integer) stack.push_back(Cell::make_integer(1));
+        //         else stack.push_back(Cell::make_integer(0));
+        //     }
+        //     else if (x.type == String)
+        //     {
+        //         if (std::string(x.string) == std::string(y.string)) 
+        //             stack.push_back(Cell::make_integer(1));
+        //         else stack.push_back(Cell::make_integer(0));
+        //     }
+        //     else if (x.type == Nil)
+        //         stack.push_back(Cell::make_integer(1));
+        //     else if (x.type == Lambda)
+        //     {
+        //         if (x.lambda_addr == y.lambda_addr) stack.push_back(Cell::make_integer(1));
+        //         else stack.push_back(Cell::make_integer(0));
+        //     }
+        //     else return panic(op, "Comparing pairs is not supported");
+        // }
+        // else if (op == "LT")
+        // {
+        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+        //     Cell x = stack.back(); stack.pop_back();
+        //     Cell y = stack.back(); stack.pop_back();
+        //     if (x.type != y.type) return panic(op, "Type mismatch");
+        //     if (x.type == Int)
+        //     {
+        //         if (y.integer < x.integer) stack.push_back(Cell::make_integer(1));
+        //         else stack.push_back(Cell::make_integer(0));
+        //     }
+        //     else return panic(op, "Type mismatch");
+        // }
+        // else if (op == "EQT")
+        // {
+        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+        //     Cell& x = stack[stack.size() - 1];
+        //     Cell& y = stack[stack.size() - 2];
+        //     if (x.type == y.type) stack.push_back(Cell::make_integer(1));
+        //     else stack.push_back(Cell::make_integer(0));            
+        // }
+        // else if (op == "EQSI")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     if (stack.back().type != String) return panic(op, "Type mismatch");
+        //     stack.push_back(Cell::make_integer(tokens[1] == stack.back().string ? 1 : 0));            
+        // }
+        // else if (op == "RJNZ")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     if (stack.back().type != Int) return panic(op, "Type mismatch");
+        //     if (stack.back().integer)
+        //     {
+        //         pc += std::stoi(tokens[1]);
+        //         dont_step_pc = true;
+        //     }
+        // }
+        // else if (op == "RJZ")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     if (stack.back().type != Int) return panic(op, "Type mismatch");
+        //     if (!stack.back().integer)
+        //     {
+        //         pc += std::stoi(tokens[1]);
+        //         dont_step_pc = true;
+        //     }
+        // }
+        // else if (op == "RJMP")
+        // {
+        //     pc += std::stoi(tokens[1]);
+        //     dont_step_pc = true;
+        // }
+        // else if (op == "JMP")
+        // {
+        //     pc = std::stoi(tokens[1]);
+        //     dont_step_pc = true;
+        // }
+        // else if (op == "PUSHNIL")
+        // {
+        //     stack.push_back(Cell::make_nil());
+        // }
+        // else if (op == "PUSHPC")
+        // {
+        //     stack.push_back(Cell::make_integer(pc));
+        // }
+        // else if (op == "PUSHL")
+        // {
+        //     Cell l = Cell::make_lambda(std::stoi(tokens[1]));
+        //     l.lambda_env = env;
+        //     stack.push_back(l);
+        // }
+        // else if (op == "PUSHFS")
+        // {
+        //     stack.push_back(stack[stack.size() - std::stoi(tokens[1]) - 1]);
+        // }
+        // else if (op == "FIN")
+        // {
+        //     stop = true;
+        // }
+        // else if (op == "CALL")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     if (stack.back().type != Lambda) return panic(op, "Type mismatch");
+        //     int old_pc = pc;
+        //     pc = stack.back().lambda_addr;
+        //     Cell oldenv = *env;
+        //     if (stack.back().lambda_env) env = stack.back().lambda_env;
+        //     else return panic(op, "Lambda has no bound env");
+        //     stack.pop_back();            
+        //     stack.push_back(Cell::make_integer(old_pc + 1));
+        //     stack.push_back(oldenv);
+        //     dont_step_pc = true;                        
+        // }
+        // else if (op == "RET")
+        // {
+        //     // migrate env from stack to memory
+        //     Cell e = stack.back(); stack.pop_back();
+        //     memory.push_back(e);
+        //     env = &memory.back();
+        //     pc = stack.back().integer; stack.pop_back();
+        //     dont_step_pc = true;
+        // }
+        // else if (op == "POP")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     stack.pop_back();
+        // }
+        // else if (op == "CAR")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     if (stack.back().type != Pair) return panic(op, "Type mismatch");
+        //     stack.back() = *stack.back().left;
+        // }
+        // else if (op == "CDR")
+        // {
+        //     if (stack.empty()) return panic(op, "Empty stack");
+        //     if (stack.back().type != Pair) return panic(op, "Type mismatch");
+        //     stack.back() = *stack.back().right;
+        // }
+        // else if (op == "SWAP")
+        // {
+        //     // TODO: check swap argument and issue panic in case needed
+        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+        //     Cell tmp = stack.back();
+        //     stack.back() = stack[stack.size() - 2 - std::stoi(tokens[1])];
+        //     stack[stack.size() - 2 - std::stoi(tokens[1])] = tmp;
+        // }
         if (!dont_step_pc) pc += 1;
         ticks += 1;
     }
     
     void debug()
     {
-        if (ctx)
-        {
-            // cout << "Disassembly:" << endl;
-            // jit_dump_function(stdout, main, "program");
-            size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
-            cout << "JIT time: " << jit_time << " ms" << endl;
-            cout << "Execution time: " << execution_time<< " ms" << endl;
-            cout << "GC ran: " << gc_count << " time(s)" << endl;
-            cout << "  Collected: " << gc_collected << " cells" << endl;
-            cout << "Environment pointer: " << jit_env_ptr << endl;
-            cout << "Stack size: " << jit_stack_ptr << endl;
-            cout << "Memory size: " << jit_memory_ptr - offset << endl;
-            cout << "Stack:" <<  endl;
-            for (int i = jit_stack_ptr - 1; i >= 0; --i)
-                cout << "    " << jit_stack[i].pp() << endl;
-            // cout << "Memory:" << endl;       
-            // for (int i = offset; i < jit_memory_ptr; ++i)
-            //     cout << "    " << jit_memory[i].pp() << endl;
-        }
-        else
-        {
-            cout << "Execution time: " << execution_time<< " ms" << endl;
-            cout << "VM info" << endl;
-            cout << "  PC: " << pc << endl;
-            cout << "  Ticks: " << ticks << endl;
-            cout << "  Stack historic max size: " << stack_historic_max_size << endl;
-            cout << "  Stack size: " << stack.size() << endl;
-            cout << "  Stack contents: " << endl;
-            for (auto x : stack)
-                cout << "    " << x.pp() << endl;            
-            cout << "  Env size: " << get_env_size() << endl;
-            Cell* cur = env;
-            while (cur->left && cur->left->left)
-            {
-                cout << "    " << cur->left->left->pp() << " -> " << cur->left->right->pp() << endl;
-                cur = cur->right;
-            }
-            cout << "  Memory size: " << memory.size() << endl;
-        }
+        // cout << "Disassembly:" << endl;
+        // jit_dump_function(stdout, main, "program");
+        size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
+        cout << "JIT time: " << jit_time << " ms" << endl;
+        cout << "Execution time: " << execution_time<< " ms" << endl;
+        cout << "GC ran: " << gc_count << " time(s)" << endl;
+        cout << "  Collected: " << gc_collected << " cells" << endl;
+        cout << "Environment pointer: " << jit_env_ptr << endl;
+        cout << "Stack size: " << stack_ptr << endl;
+        cout << "Memory size: " << heap_ptr - offset << endl;
+        cout << "Stack:" <<  endl;
+        for (int i = stack_ptr - 1; i >= 0; --i)
+            cout << "    " << stack[i].pp() << endl;
+        // cout << "Memory:" << endl;       
+        // for (int i = offset; i < heap_ptr; ++i)
+        //     cout << "    " << heap[i].pp() << endl;
     }
 
-    void dump_graph()
-    {
-        std::ofstream ofs("graph.txt");
-        ofs << "digraph test {" << endl;
-        for (auto& x : memory)
-        {
-            Cell* p = &x;
-            std::string xtype;
-            if (x.type == Pair) xtype = p == env ? "ENV_P_" : "P_";
-            else if (x.type == Lambda) xtype = "L_";
-            else if (x.type == Int) xtype = "I_" + std::to_string(x.integer) + "_";
-            else if (x.type == Nil) xtype = "N_";
-            else if (x.type == String) xtype = "S_" + std::string(x.string) + "_";
-            for (auto& y : memory)
-                if (y.type == Pair)
-                    if (y.left == p || y.right == p) 
-                    { 
-                        ofs << "edge [style=solid,color=black];" << endl;
-                        ofs << (&y == env ? "ENV_P_" : "P_") << &y << " -> " << xtype << p << endl;
-                        if (!y.refcount) ofs << (&y == env ? "ENV_P_" : "P_") << &y << " [style=filled,color=gray];" << endl;
-                        if (!p->refcount) ofs << xtype << p << " [style=filled,color=gray];" << endl;
-                    }
-                    else if (x.type == Lambda && x.lambda_env == &y)
-                    {
-                        ofs << "edge [style=dashed,color=red];" << endl;
-                        ofs << "L_" << p << " -> P_" << &y  << endl;                         
-                        if (!y.refcount) ofs << "P_" << &y << " [style=filled,color=gray];" << endl;
-                        if (!p->refcount) ofs << "L_" << p << " [style=filled,color=gray];" << endl;
-                    }
-                else if (y.type == Lambda)
-                    if (y.lambda_env == p)
-                    { 
-                        ofs << "edge [style=dashed,color=red];" << endl;
-                        ofs << "L_" << &y << " -> " << xtype << p << endl; 
-                        if (!y.refcount) ofs << "L_" << &y << " [style=filled,color=gray];" << endl;
-                        if (!p->refcount) ofs << xtype << p << " [style=filled,color=gray];" << endl;
-                    }
-        }
-        ofs << "}" << endl;
-    }
-
-    void gc_intepreter_recursive(Cell* root)
-    {
-        if (!root) return;
-        if (root->refcount) return;
-        root->refcount++;
-        if (root->type == Lambda) return gc_intepreter_recursive(root->lambda_env);
-        if (root->type == Pair) { gc_intepreter_recursive(root->left); gc_intepreter_recursive(root->right); }
-    }
-
-    void gc_interpreter()
-    {
-        size_t used = 0;
-        cout << "Garbage collecting: " << memory.size() << " cells" << endl;
-        gc_intepreter_recursive(env);
-        for (auto& x : memory) if (x.refcount) used += 1;
-        cout << "  Found orphaned cells: " << memory.size() - used << endl;
-        cout << "  Found used cells: " << used << endl;
-    }
-
-    void gc_jit_mark_recursive(JitCell& c)
+    void gc_mark_recursive(JitCell& c)
     {
         if (c.as64 & 0x8000000000000000ull) return;
         const JitCell tmp = c;
         c.as64 |= 0x8000000000000000ull;
-        if (tmp.type == Lambda) gc_jit_mark_recursive(jit_memory[tmp.lambda_env]);
+        if (tmp.type == Lambda) gc_mark_recursive(heap[tmp.lambda_env]);
         else if (tmp.type == Pair)
         {
-            gc_jit_mark_recursive(jit_memory[tmp.left]);
-            gc_jit_mark_recursive(jit_memory[tmp.right]);
+            gc_mark_recursive(heap[tmp.left]);
+            gc_mark_recursive(heap[tmp.right]);
         }
         else if (tmp.type == Environment)
         {
-            gc_jit_mark_recursive(jit_memory[tmp.as64 & 0x0FFFFFFFFFFFFFFFull]);
+            gc_mark_recursive(heap[tmp.as64 & 0x0FFFFFFFFFFFFFFFull]);
         }
     }
 
-    size_t gc_jit_mark()
+    size_t gc_mark()
     {
-        gc_jit_mark_recursive(jit_memory[jit_env_ptr]);
-        for (int i = 0; i < jit_stack_ptr; ++i)
-            gc_jit_mark_recursive(jit_stack[i]);
-        for (int i = 0; i < jit_stack_ptr; ++i)
-            jit_stack[i].as64 &= 0x7FFFFFFFFFFFFFFFull;
+        gc_mark_recursive(heap[env_ptr]);
+        for (int i = 0; i < stack_ptr; ++i)
+            gc_mark_recursive(stack[i]);
+        for (int i = 0; i < stack_ptr; ++i)
+            stack[i].as64 &= 0x7FFFFFFFFFFFFFFFull;
         // count used, optional, for stats only
         size_t unused = 0;
         const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
-        for (int i = offset; i < jit_memory_ptr; ++i)
-            if ((jit_memory[i].as64 & 0x8000000000000000ull) == 0) 
+        for (int i = offset; i < heap_ptr; ++i)
+            if ((heap[i].as64 & 0x8000000000000000ull) == 0) 
                 unused += 1;
         return unused;
     }
 
-    void gc_jit_scavenge()
+    void gc_scavenge()
     {
         size_t new_heap_ptr = 0;
         const size_t offset = (gc_count & 1) ? 0 : (MEMORY_SIZE >> 1);
         const size_t source_offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
-        JitCell* new_heap = &jit_memory[offset], *cur_heap = new_heap;
-        for (int i = source_offset; i < jit_memory_ptr; ++i)
+        JitCell* new_heap = &heap[offset], *cur_heap = new_heap;
+        for (int i = source_offset; i < heap_ptr; ++i)
         {
-            JitCell& cell = jit_memory[i];
+            JitCell& cell = heap[i];
             if (cell.as64 & 0x8000000000000000ull)
             {
                 // copy the cell clearing 'reachable' bit
@@ -677,99 +532,93 @@ struct VM
                 cur_heap += 1;
             }
         }
-        jit_memory_ptr = cur_heap - new_heap;
+        heap_ptr = cur_heap - new_heap;
         // fix relocations
         cur_heap = new_heap;
         // stack
-        for (int i = 0; i < jit_stack_ptr; ++i)
+        for (int i = 0; i < stack_ptr; ++i)
         {
-            JitCell& cell = jit_stack[i];
+            JitCell& cell = stack[i];
             if (cell.type == Pair)
             {
-                cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
-                cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.left = heap[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.right = heap[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
             }
             else if (cell.type == Lambda)
-                cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.lambda_env = heap[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
             else if (cell.type == Environment)
-                cell.as64 = (jit_memory[cell.as64 & 0x7FFFFFFFFFFFFFFFull].as64) | 0x6000000000000000ull;
+                cell.as64 = (heap[cell.as64 & 0x7FFFFFFFFFFFFFFFull].as64) | 0x6000000000000000ull;
         }
         // heap
-        for (int i = 0; i < jit_memory_ptr; ++i)
+        for (int i = 0; i < heap_ptr; ++i)
         {
             JitCell& cell = *cur_heap++;
             if (cell.type == Pair)
             {
-                cell.left = jit_memory[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
-                cell.right = jit_memory[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.left = heap[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.right = heap[cell.right].as64 & 0x7FFFFFFFFFFFFFFFull;
             }
             else if (cell.type == Lambda)
             {
-                cell.lambda_env = jit_memory[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
+                cell.lambda_env = heap[cell.lambda_env].as64 & 0x7FFFFFFFFFFFFFFFull;
             }
         }
         // save new mp
-        jit_memory_ptr = cur_heap - new_heap + offset;
+        heap_ptr = cur_heap - new_heap + offset;
         // fix ep
-        jit_env_ptr = jit_memory[jit_env_ptr].as64 & 0x7FFFFFFFFFFFFFFFull;
-    }
-
-    void gc_jit()
-    {
-        size_t unused = gc_jit_mark();
-        gc_collected += unused;
-        gc_jit_scavenge();
-        gc_count += 1;
+        env_ptr = heap[env_ptr].as64 & 0x7FFFFFFFFFFFFFFFull;
     }
 
     void gc()
     {
-        if (ctx) gc_jit();
-        else gc_interpreter();
+        size_t unused = gc_mark();
+        gc_collected += unused;
+        gc_scavenge();
+        gc_count += 1;
     }
 
     void init_jit()
     {
-        jit_stack.resize(STACK_SIZE);
-        jit_memory.resize(MEMORY_SIZE);
-        jit_env_ptr = 1;
-        jit_stack_ptr = 0;
-        jit_memory_ptr = 2; // 0 - nil, 1 - global env, 2 - user data
+        stack.resize(STACK_SIZE);
+        heap.resize(MEMORY_SIZE);
+        env_ptr = 1;
+        stack_ptr = 0;
+        heap_ptr = 2; // 0 - nil, 1 - global env, 2 - user data
         ctx = jit_context_create();
         jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, nullptr, 0, 1);
         main = jit_function_create(ctx, signature);
         // bind jit stack
         jit_constant_t stack_addr_const;
         stack_addr_const.type = jit_type_void_ptr;
-        stack_addr_const.un.ptr_value = &jit_stack[0];
-        stack_addr = jit_value_create_constant(main, &stack_addr_const);
+        stack_addr_const.un.ptr_value = &stack[0];
+        jit_stack_addr = jit_value_create_constant(main, &stack_addr_const);
         // bind jit memory
         jit_constant_t memory_addr_const;
         memory_addr_const.type = jit_type_void_ptr;
-        memory_addr_const.un.ptr_value = &jit_memory[0]; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
-        memory_addr = jit_value_create_constant(main, &memory_addr_const);
+        memory_addr_const.un.ptr_value = &heap[0]; // 0 - nil, 1 - env, 2 .. MEMORY_SIZE - memory
+        jit_memory_addr = jit_value_create_constant(main, &memory_addr_const);
         // bind jit stack pointer
         jit_constant_t stack_ptr_const;
         stack_ptr_const.type = jit_type_void_ptr;
-        stack_ptr_const.un.ptr_value = &jit_stack_ptr;
-        stack_ptr = jit_value_create_constant(main, &stack_ptr_const);
+        stack_ptr_const.un.ptr_value = &stack_ptr;
+        jit_stack_ptr = jit_value_create_constant(main, &stack_ptr_const);
         // bind jit memory pointer
         jit_constant_t memory_ptr_const;
         memory_ptr_const.type = jit_type_void_ptr;
-        memory_ptr_const.un.ptr_value = &jit_memory_ptr;
-        memory_ptr = jit_value_create_constant(main, &memory_ptr_const);
+        memory_ptr_const.un.ptr_value = &heap_ptr;
+        jit_memory_ptr = jit_value_create_constant(main, &memory_ptr_const);
         // bind jit dbg var
         jit_constant_t gc_count_ptr_const;
         gc_count_ptr_const.type = jit_type_void_ptr;
         gc_count_ptr_const.un.ptr_value = &gc_count;
-        gc_count_ptr = jit_value_create_constant(main, &gc_count_ptr_const);
+        jit_gc_count_ptr = jit_value_create_constant(main, &gc_count_ptr_const);
         // bind jit env var
         jit_constant_t env_ptr_const;
         env_ptr_const.type = jit_type_void_ptr;
-        env_ptr_const.un.ptr_value = &jit_env_ptr;
-        env_ptr = jit_value_create_constant(main, &env_ptr_const);
+        env_ptr_const.un.ptr_value = &env_ptr;
+        jit_env_ptr = jit_value_create_constant(main, &env_ptr_const);
         // create default env
-        jit_memory[1] = JitCell::make_pair(0, 0);
+        heap[1] = JitCell::make_pair(0, 0);
     }
 
     void prepare_jump_table(const std::vector<std::string>& program)
@@ -817,8 +666,8 @@ struct VM
             jit_label_t run_gc = jit_label_undefined, 
                         no_gc = jit_label_undefined,
                         first_half = jit_label_undefined;
-            jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_uint);
-            jit_value_t gcc = jit_insn_load_relative(main, gc_count_ptr, 0, jit_type_uint);
+            jit_value_t mp = jit_insn_load_relative(main, jit_memory_ptr, 0, jit_type_uint);
+            jit_value_t gcc = jit_insn_load_relative(main, jit_gc_count_ptr, 0, jit_type_uint);
             gcc = jit_insn_eq(main, jit_insn_and(main, gcc, c1), c1);
             jit_insn_branch_if_not(main, gcc, &first_half);
             mp = jit_insn_sub(main, mp, jit_value_create_nint_constant(main, jit_type_uint, MEMORY_SIZE >> 1));
@@ -864,13 +713,13 @@ struct VM
             }
             else
             {
-                jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+                jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
                 jit_value_t sp1 = jit_insn_add(main, sp, cm1);
-                jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
-                jit_insn_store_relative(main, stack_ptr, 0, sp1);
+                jit_value_t sp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
+                jit_insn_store_relative(main, jit_stack_ptr, 0, sp1);
                 val = jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong);
             }
-            jit_insn_call_native(main, "print", reinterpret_cast<void*>(&jit_vm_print_cell<JitCell>), signature, &val, 1, JIT_CALL_NOTHROW);
+            jit_insn_call_native(main, "print", reinterpret_cast<void*>(&jit_vm_print_cell), signature, &val, 1, JIT_CALL_NOTHROW);
         }
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
@@ -897,18 +746,18 @@ struct VM
 
             if (op == "PUSHL" && std::stoi(tokens[1]) != -1) 
             {
-                jit_value_t ep = jit_insn_convert(main, jit_insn_load_relative(main, env_ptr, 0, jit_type_uint), jit_type_ulong, 0);
+                jit_value_t ep = jit_insn_convert(main, jit_insn_load_relative(main, jit_env_ptr, 0, jit_type_uint), jit_type_ulong, 0);
                 ep = jit_insn_shl(main, ep, jit_value_create_nint_constant(main, jit_type_uint, 32));
                 cellval = jit_insn_or(main, cellval, ep);
             }
             // current sp
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
-            // stack_addr + sp
-            jit_value_t stack_addr_offsetted = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
+            // jit_stack_addr + sp
+            jit_value_t jit_stack_addr_offsetted = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8));
             // store
-            jit_insn_store_relative(main, stack_addr_offsetted, 0, cellval);
+            jit_insn_store_relative(main, jit_stack_addr_offsetted, 0, cellval);
             // modify sp
-            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
         else if (op == "ADD" || op == "SUB" || 
                 op == "MUL" || op == "DIV" || 
@@ -916,11 +765,11 @@ struct VM
                 op == "EQT" || op == "MOD")
         {
             // current sp
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp_1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_2 = jit_insn_add(main, sp, cm2);
-            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_1, c8));
-            jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8));
+            jit_value_t v1_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_1, c8));
+            jit_value_t v2_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_2, c8));
             // load sp-1 snd sp-2 values, save v1 type and clear type bits on both values
             jit_value_t v1t = jit_insn_load_relative(main, v1_addr, 0, jit_type_long);
             jit_value_t v2t = jit_insn_load_relative(main, v2_addr, 0, jit_type_long);
@@ -940,53 +789,53 @@ struct VM
                                             jit_value_create_long_constant(main, jit_type_ulong, JitCell::make_integer(0).as64));
             // store value on top of the stack
              // EQT operations doesn't pop operands from stack
-            if (op == "EQT") v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            if (op == "EQT") v2_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8));
             jit_insn_store_relative(main, v2_addr, 0, rf);
             // modify sp
             if (op == "EQT") sp_1 = jit_insn_add(main, sp, c1);
-            jit_insn_store_relative(main, stack_ptr, 0, sp_1);
+            jit_insn_store_relative(main, jit_stack_ptr, 0, sp_1);
         }
         else if (op == "POP")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
-            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, cm1));
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
+            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, cm1));
         }
         else if (op == "CONS")
         {
             // current sp
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp_1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_2 = jit_insn_add(main, sp, cm2);
-            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_1, c8));
-            jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8));
+            jit_value_t v1_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_1, c8));
+            jit_value_t v2_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_2, c8));
             // load sp-1 snd sp-2 values, save v1 type and clear type bits on both values
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_long);
             jit_value_t v2 = jit_insn_load_relative(main, v2_addr, 0, jit_type_long);
             // migrate values to memory and modify mp
-            jit_value_t mp = jit_insn_convert(main, jit_insn_load_relative(main, memory_ptr, 0, jit_type_uint), jit_type_ulong, 0);
+            jit_value_t mp = jit_insn_convert(main, jit_insn_load_relative(main, jit_memory_ptr, 0, jit_type_uint), jit_type_ulong, 0);
             jit_value_t mp1 = jit_insn_add(main, mp, c1);
-            jit_value_t v1m_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp, c8));
-            jit_value_t v2m_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp1, c8));
+            jit_value_t v1m_addr = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, mp, c8));
+            jit_value_t v2m_addr = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, mp1, c8));
             jit_insn_store_relative(main, v1m_addr, 0, v1);
             jit_insn_store_relative(main, v2m_addr, 0, v2);
-            jit_insn_store_relative(main, memory_ptr, 0, jit_insn_convert(main, jit_insn_add(main, mp, c2), jit_type_uint, 0));
+            jit_insn_store_relative(main, jit_memory_ptr, 0, jit_insn_convert(main, jit_insn_add(main, mp, c2), jit_type_uint, 0));
             // create a pair and place it on the stack
             jit_value_t mp1s = jit_insn_shl(main, mp1, jit_value_create_nint_constant(main, jit_type_uint, 30));
             // modify sp
             jit_value_t pair = jit_insn_or(main, jit_insn_or(main, mp1s, mp),
                                                  jit_value_create_long_constant(main, jit_type_ulong, 0x1000000000000000ull));
             // store
-            jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_2, c8)), 0, pair);
+            jit_insn_store_relative(main, jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_2, c8)), 0, pair);
             // modify sp
-            jit_insn_store_relative(main, stack_ptr, 0, sp_1);
+            jit_insn_store_relative(main, jit_stack_ptr, 0, sp_1);
         }
         else if (op == "SWAP")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp_v2 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 2)));
-            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
-            jit_value_t v2_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v2, c8));
+            jit_value_t v1_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_v1, c8));
+            jit_value_t v2_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_v2, c8));
             // load values
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
             jit_value_t v2 = jit_insn_load_relative(main, v2_addr, 0, jit_type_ulong);
@@ -996,33 +845,33 @@ struct VM
         }
         else if (op == "PUSHFS")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 1)));
-            jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
-            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
+            jit_value_t sp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8));
+            jit_value_t v1_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_v1, c8));
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
             jit_insn_store_relative(main, sp_addr, 0, v1);
             // modify sp
-            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
         else if (op == "DEF")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
-            jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
-            jit_value_t ep = jit_insn_load_relative(main, env_ptr, 0, jit_type_uint);
-            jit_value_t ep_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, ep, c8));
+            jit_value_t sp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_v1, c8));
+            jit_value_t ep = jit_insn_load_relative(main, jit_env_ptr, 0, jit_type_uint);
+            jit_value_t ep_addr = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, ep, c8));
             // migrate def pair from stack to memory
-            jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_uint);
-            jit_value_t defpair_mpaddr = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp, c8));
+            jit_value_t mp = jit_insn_load_relative(main, jit_memory_ptr, 0, jit_type_uint);
+            jit_value_t defpair_mpaddr = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, mp, c8));
             jit_value_t defpair = jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong);
             jit_insn_store_relative(main, defpair_mpaddr, 0, defpair);
             // migrate oldenv to the back of the main memory
-            jit_value_t oldenv_mpaddr = jit_insn_add(main, memory_addr, jit_insn_mul(main, jit_insn_add(main, mp, c1), c8));
+            jit_value_t oldenv_mpaddr = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, jit_insn_add(main, mp, c1), c8));
             jit_value_t env = jit_insn_load_relative(main, ep_addr, 0, jit_type_ulong);
             jit_insn_store_relative(main, oldenv_mpaddr, 0, env);
             // modify mp
-            jit_insn_store_relative(main, memory_ptr, 0, jit_insn_add(main, mp, c2));
+            jit_insn_store_relative(main, jit_memory_ptr, 0, jit_insn_add(main, mp, c2));
             // modify current env
             jit_value_t right = jit_insn_shl(main, jit_insn_convert(main, jit_insn_add(main, mp, c1), jit_type_ulong, 0),
                                                     jit_value_create_nint_constant(main, jit_type_uint, 30));
@@ -1031,34 +880,34 @@ struct VM
             jit_insn_store_relative(main, ep_addr, 0, env);
             // load left cell (a string likely) and store it on the stack instead of the defpair 
             jit_value_t left_idx = jit_insn_and(main, defpair, jit_value_create_nint_constant(main, jit_type_uint, 0x000000003FFFFFFFull));
-            jit_value_t left_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, left_idx, c8));
+            jit_value_t left_addr = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, left_idx, c8));
             jit_insn_store_relative(main, sp_addr, 0, jit_insn_load_relative(main, left_addr, 0, jit_type_ulong));
         }
         else if (op == "EQSI")
         {
             JitCell cell = JitCell::make_string(tokens[1]);
             // load a value from the top of the stack
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
-            jit_value_t v1_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp_v1, c8));
+            jit_value_t v1_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_v1, c8));
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
             // check cells are equal
             jit_value_t v1eq = jit_insn_eq(main, v1, jit_value_create_long_constant(main, jit_type_ulong, cell.as64));
             // set type to Int
             jit_value_t v1eqt = jit_insn_or(main, v1eq, jit_value_create_long_constant(main, jit_type_ulong, 0x2000000000000000ull));
-            jit_value_t result_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
+            jit_value_t result_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8));
             // store eq result
             jit_insn_store_relative(main, result_addr, 0, v1eqt);
             // modify sp
-            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
         else if (op == "PUSHCAR" || op == "PUSHCDR" || op == "CAR" || op == "CDR")
         {
             bool car = (op == "PUSHCAR" || op == "CAR") ? true : false;
             bool remove_from_stack = (op == "CAR" || op == "CDR") ? true : false;
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
-            jit_value_t pair_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t pair_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
             // load pair from stack
             jit_value_t pair = jit_insn_load_relative(main, pair_addr, 0, jit_type_ulong);
             // read 'left' part of a cell
@@ -1070,39 +919,39 @@ struct VM
             // load left cell from memory
             jit_value_t result_addr = jit_insn_convert(main, 
                                                         jit_insn_add(main, 
-                                                                        memory_addr, 
+                                                                        jit_memory_addr, 
                                                                         jit_insn_mul(main, cell_addr, c8)), jit_type_uint, 0);
             // store it on the stack
             if (remove_from_stack)
-                jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8)), 0, 
+                jit_insn_store_relative(main, jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8)), 0, 
                                           jit_insn_load_relative(main, result_addr, 0, jit_type_ulong));
             else
-                jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, 
+                jit_insn_store_relative(main, jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8)), 0, 
                                           jit_insn_load_relative(main, result_addr, 0, jit_type_ulong));
             // modify sp
-            if (!remove_from_stack) jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+            if (!remove_from_stack) jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c1));
         }
         else if (op == "LOADENV")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
-            jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8));
-            jit_value_t ep = jit_insn_load_relative(main, env_ptr, 0, jit_type_uint);
-            jit_value_t ep_addr = jit_insn_add(main, memory_addr, jit_insn_mul(main, ep, c8));
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
+            jit_value_t sp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8));
+            jit_value_t ep = jit_insn_load_relative(main, jit_env_ptr, 0, jit_type_uint);
+            jit_value_t ep_addr = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, ep, c8));
             jit_value_t env = jit_insn_load_relative(main, ep_addr, 0, jit_type_ulong);
             jit_insn_store_relative(main, sp_addr, 0, env);   
-            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));   
+            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c1));   
         }
         else if (op == "STOREENV")
         {
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
-            jit_value_t sp_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
-            jit_value_t mp = jit_insn_load_relative(main, memory_ptr, 0, jit_type_uint);
-            jit_value_t envmp = jit_insn_add(main, memory_addr, jit_insn_mul(main, mp, c8));
-            jit_insn_store_relative(main, env_ptr, 0, mp);
+            jit_value_t sp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t mp = jit_insn_load_relative(main, jit_memory_ptr, 0, jit_type_uint);
+            jit_value_t envmp = jit_insn_add(main, jit_memory_addr, jit_insn_mul(main, mp, c8));
+            jit_insn_store_relative(main, jit_env_ptr, 0, mp);
             jit_insn_store_relative(main, envmp, 0, jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong));
-            jit_insn_store_relative(main, stack_ptr, 0, sp1);
-            jit_insn_store_relative(main, memory_ptr, 0, jit_insn_add(main, mp, c1));
+            jit_insn_store_relative(main, jit_stack_ptr, 0, sp1);
+            jit_insn_store_relative(main, jit_memory_ptr, 0, jit_insn_add(main, mp, c1));
         }
         else if (op == "NOP")
         {
@@ -1110,48 +959,48 @@ struct VM
         else if (op == "CALL")
         {
             // load IP from stack            
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
-            jit_value_t l_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t l_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t lambda = jit_insn_load_relative(main, l_addr, 0, jit_type_ulong);
             jit_value_t lambda_addr = jit_insn_and(main, lambda, jit_value_create_long_constant(main, jit_type_ulong, 0x00000000FFFFFFFFull));
             jit_value_t lambda_env = jit_insn_and(main, lambda, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFF00000000ull));
             lambda_env = jit_insn_shr(main, lambda_env, jit_value_create_nint_constant(main, jit_type_uint, 32));
             // push env, setting cell type to Environment
             jit_value_t env = jit_insn_convert(main, 
-                                                    jit_insn_load_relative(main, env_ptr, 0, jit_type_uint), 
+                                                    jit_insn_load_relative(main, jit_env_ptr, 0, jit_type_uint), 
                                                     jit_type_ulong, 0);
             env = jit_insn_or(main, env, jit_value_create_long_constant(main, jit_type_ulong, 0x6000000000000000ull));
             jit_insn_store_relative(main, l_addr, 0, env);
             // push ip, setting cell type to InstructionPointer
             jit_value_t ip = jit_value_create_long_constant(main, jit_type_ulong, jit_jump_map[pc + 1]);
             ip = jit_insn_or(main, ip, jit_value_create_long_constant(main, jit_type_ulong, 0x5000000000000000ull));
-            jit_insn_store_relative(main, jit_insn_add(main, stack_addr, jit_insn_mul(main, sp, c8)), 0, ip);
+            jit_insn_store_relative(main, jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8)), 0, ip);
             // load lambda's env
-            jit_insn_store_relative(main, env_ptr, 0, lambda_env);
+            jit_insn_store_relative(main, jit_env_ptr, 0, lambda_env);
             // we popped lambda object and pushed env + pc
-            jit_insn_store_relative(main, stack_ptr, 0, jit_insn_add(main, sp, c1));
+            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c1));
             // branch to 'function'
             jit_insn_jump_table(main, lambda_addr, &jit_jump_table[0], jit_jump_table.size());
         }
         else if (op == "RET")
         {
             // at this point pc and env should be at the top of the stack, otherwise boom
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp2 = jit_insn_add(main, sp, cm2);
             // load pc, clearing its type
-            jit_value_t pc_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t pc_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t pc = jit_insn_convert(main, jit_insn_load_relative(main, pc_addr, 0, jit_type_ulong), jit_type_uint, 0);
             pc = jit_insn_and(main, pc, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
             // load env, clearing its type
-            jit_value_t env_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp2, c8));
+            jit_value_t env_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp2, c8));
             jit_value_t env = jit_insn_load_relative(main, env_addr, 0, jit_type_ulong);
             env = jit_insn_and(main, env, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
             // set env
-            jit_insn_store_relative(main, env_ptr, 0, jit_insn_convert(main, env, jit_type_uint, 0));
+            jit_insn_store_relative(main, jit_env_ptr, 0, jit_insn_convert(main, env, jit_type_uint, 0));
             // we popped env + pc
-            jit_insn_store_relative(main, stack_ptr, 0, sp2);
+            jit_insn_store_relative(main, jit_stack_ptr, 0, sp2);
             // branch back
             jit_insn_jump_table(main, pc, &jit_jump_table[0], jit_jump_table.size());
         }
@@ -1159,9 +1008,9 @@ struct VM
         {
             jit_label_t if_yes = jit_label_undefined, if_no = jit_label_undefined;
             // load value from stack
-            jit_value_t sp = jit_insn_load_relative(main, stack_ptr, 0, jit_type_uint);
+            jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
-            jit_value_t val_addr = jit_insn_add(main, stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t val_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t val = jit_insn_and(main, jit_insn_load_relative(main, val_addr, 0, jit_type_ulong), cdatamask);
             if (op != "RJMP")
             {
@@ -1181,7 +1030,7 @@ struct VM
     }
 };
 
-void jit_vm_gc(VM* vm) { vm->gc_jit(); }
+void jit_vm_gc(VM* vm) { vm->gc(); }
 
 VM vm;
 
