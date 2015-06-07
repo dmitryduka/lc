@@ -15,7 +15,7 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 100000;
+const size_t MEMORY_SIZE = 50000;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment };
 
@@ -143,9 +143,13 @@ struct VM
             gc_count(0),
             gc_collected(0)
     { 
-    	stack.reserve(STACK_SIZE); 
-        heap.reserve(MEMORY_SIZE);
-    	env_ptr  = 1;
+        stack.resize(STACK_SIZE);
+        heap.resize(MEMORY_SIZE);
+        stack_ptr = 0;
+        env_ptr = 1;
+        heap_ptr = 2; // 0 - nil, 1 - global env, 2 - user data
+        // create default env
+        heap[1] = Cell::make_pair(0, 0);
     }
 
     ~VM()
@@ -186,8 +190,6 @@ struct VM
             if(ctx) step_jit(program[pc]);
             else step_interpret(program[pc]);
             stack_historic_max_size = stack.size() > stack_historic_max_size ? stack.size() : stack_historic_max_size;
-            auto diff = std::chrono::steady_clock::now() - start;
-            if (!ctx) execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
             if (stop) break;
         }
         if (ctx)
@@ -201,6 +203,11 @@ struct VM
             auto diff = std::chrono::steady_clock::now() - start;
             execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
         }
+        else
+        {
+            auto diff = std::chrono::steady_clock::now() - start;
+            execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
+        }     
     }
 
     void step_interpret(const std::string& instruction)
@@ -209,33 +216,31 @@ struct VM
         auto tokens = tokenize(instruction);
         if (tokens.empty()) return;
         const std::string op = tokens[0];
-        if (op == "PRN")
+
+        // for operations allocating heap space, check if we need to start GC
+        if (op == "CONS" || op == "DEF" || op == "STOREENV")
+        {
+            const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
+            if (heap_ptr - offset > (MEMORY_SIZE >> 1) - 3) gc();
+        }
+
+        if (op == "GC") gc();
+        else if (op == "PRN")
         {
             if (stack_ptr < 1) return panic(op, "Not enough elements on the stack");
-            Cell x = stack[stack_ptr - 1];
-            stack_ptr -= 1;
-            jit_vm_print_cell(x);
+            jit_vm_print_cell(stack[--stack_ptr]);
         }
         else if (op == "PRNL")
-        {
             jit_vm_print_cell(Cell::make_string("\n"));
-        }
         else if (op == "PUSHCI")
-        {
-            stack[stack_ptr] = Cell::make_integer(std::stoi(tokens[1]));
-            stack_ptr += 1;
-        }
+            stack[stack_ptr++] = Cell::make_integer(std::stoi(tokens[1]));
         else if (op == "PUSHS")
-        {
-            stack[stack_ptr] = Cell::make_string(tokens[1].c_str());
-            stack_ptr += 1;
-        }
+            stack[stack_ptr++] = Cell::make_string(tokens[1].c_str());
         else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "MOD")
         {
             if (stack_ptr < 2) return panic(op, "Not enough elements on the stack");
-            Cell x = stack[stack_ptr - 1];
-            Cell y = stack[stack_ptr - 2];
-            stack_ptr -= 2;
+            Cell x = stack[--stack_ptr];
+            Cell y = stack[--stack_ptr];
             if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
             if (op == "ADD") stack[stack_ptr++] = Cell::make_integer(y.integer + x.integer);
             else if (op == "SUB") stack[stack_ptr++] = Cell::make_integer(y.integer - x.integer);
@@ -247,18 +252,14 @@ struct VM
         {
             if (!stack_ptr) return panic(op, "Not enough elements on the stack");
             Cell xy = stack[stack_ptr - 1];
-            stack_ptr -= 1;
-            heap[heap_ptr] = xy;
-           	heap[heap_ptr + 1] = heap[env_ptr];
-            heap_ptr += 2;
+            heap[heap_ptr++] = xy;
+           	heap[heap_ptr++] = heap[env_ptr];
             heap[env_ptr].right = heap_ptr - 1;
             heap[env_ptr].left = heap_ptr - 2;
-            stack[stack_ptr] = heap[heap_ptr - 2];
+            stack[stack_ptr - 1] = heap[xy.left];
         }
         else if (op == "LOADENV")
-        {
             stack[stack_ptr++] = heap[env_ptr];
-        }
         else if (op == "STOREENV")
         {
             if (!stack_ptr) panic(op, "Not enough elements on the stack");
@@ -270,12 +271,10 @@ struct VM
         {
             if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");            
             // migrate left and right from stack to memory
-            const Cell x = stack[stack_ptr - 1];
-            const Cell y = stack[stack_ptr - 2];
-            stack_ptr -= 2;
-            heap[heap_ptr] = x; 
-            heap[heap_ptr + 1] = y;
-            heap_ptr += 2;
+            const Cell x = stack[--stack_ptr];
+            const Cell y = stack[--stack_ptr];
+            heap[heap_ptr++] = x; 
+            heap[heap_ptr++] = y;
             stack[stack_ptr++] = Cell::make_pair(heap_ptr - 2, heap_ptr - 1);
         }
         else if (op == "PUSHCAR" || op == "PUSHCDR")
@@ -284,10 +283,11 @@ struct VM
             const Cell& cell = stack[stack_ptr - 1];
             if (cell.type != Pair) return panic(op, "Type mismatch");
             if (op == "PUSHCAR" && stack[stack_ptr - 1].left)
-                stack[stack_ptr++] = heap[stack[stack_ptr - 1].left];
+                stack[stack_ptr] = heap[stack[stack_ptr - 1].left];
             else if (op == "PUSHCAR" && stack[stack_ptr - 1].right)
-                stack[stack_ptr++] = heap[stack[stack_ptr - 1].right];
-            else stack[stack_ptr++] = Cell::make_nil();
+                stack[stack_ptr] = heap[stack[stack_ptr - 1].right];
+            else stack[stack_ptr] = Cell::make_nil();
+            stack_ptr += 1;
         }
         else if (op == "EQ")
         {
@@ -319,15 +319,16 @@ struct VM
         else if (op == "EQT")
         {
             if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");
-            Cell x = stack[stack_ptr - 1];
-            Cell y = stack[stack_ptr - 2];
+            const Cell& x = stack[stack_ptr - 1];
+            const Cell& y = stack[stack_ptr - 2];
             stack[stack_ptr++] = Cell::make_integer(x.type == y.type);
         }
         else if (op == "EQSI")
         {
             if (!stack_ptr) return panic(op, "Empty stack");
-            if (stack.back().type != String) return panic(op, "Type mismatch");
-            stack[stack_ptr] = Cell::make_integer(tokens[1] == stack[stack_ptr - 1].string ? 1 : 0);
+            const Cell& x = stack[stack_ptr - 1];
+            if (x.type != String) return panic(op, "Type mismatch");
+            stack[stack_ptr] = Cell::make_integer(tokens[1] == x.string ? 1 : 0);
             stack_ptr += 1;
         }
         else if (op == "RJNZ" || op == "RJZ")
@@ -353,7 +354,11 @@ struct VM
             dont_step_pc = true;
         }
         else if (op == "PUSHNIL") stack[stack_ptr++] = Cell::make_nil();
-        else if (op == "PUSHFS") stack[stack_ptr++] = stack[stack_ptr - std::stoi(tokens[1]) - 1];
+        else if (op == "PUSHFS")
+        { 
+            stack[stack_ptr] = stack[stack_ptr - std::stoi(tokens[1]) - 1];
+            stack_ptr += 1;
+        }
         else if (op == "FIN") stop = true;
         else if (op == "PUSHL")
             stack[stack_ptr++] = Cell::make_lambda(std::stoi(tokens[1]), env_ptr);
@@ -362,13 +367,15 @@ struct VM
             if (!stack_ptr) return panic(op, "Empty stack");
             Cell& cell = stack[--stack_ptr];
             if (cell.type != Lambda) return panic(op, "Type mismatch");
-            int old_pc = pc;
+            const int old_pc = pc;
+            const uint32_t oldenv = env_ptr;
             pc = cell.lambda_addr;
-            uint32_t oldenv = env_ptr;
             if (cell.lambda_env) env_ptr = cell.lambda_env;
             else return panic(op, "Lambda has no bound env");
             stack[stack_ptr++] = Cell::make_integer(old_pc + 1);
-            stack[stack_ptr++] = Cell::make_integer(oldenv);
+            Cell oenv = Cell::make_integer(oldenv);
+            oenv.type = Environment;
+            stack[stack_ptr++] = oenv;
             dont_step_pc = true;                        
         }
         else if (op == "RET")
@@ -390,14 +397,15 @@ struct VM
             if (cell.type != Pair) return panic(op, "Type mismatch");
             cell = heap[op == "CAR" ? cell.left : cell.right];
         }
-        // else if (op == "SWAP")
-        // {
-        //     // TODO: check swap argument and issue panic in case needed
-        //     if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");
-        //     Cell tmp = stack.back();
-        //     stack.back() = stack[stack.size() - 2 - std::stoi(tokens[1])];
-        //     stack[stack.size() - 2 - std::stoi(tokens[1])] = tmp;
-        // }
+        else if (op == "SWAP")
+        {
+            // TODO: check swap argument and issue panic in case needed
+            const uint32_t elno = stack_ptr - 2 - std::stoi(tokens[1]);
+            if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");
+            Cell tmp = stack[stack_ptr - 1];
+            stack[stack_ptr - 1] = stack[elno];
+            stack[elno] = tmp;
+        }
         if (!dont_step_pc) pc += 1;
         ticks += 1;
     }
@@ -406,18 +414,19 @@ struct VM
     {
         // cout << "Disassembly:" << endl;
         // jit_dump_function(stdout, main, "program");
-        size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
+        const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
+        cout << "PC: " << pc << endl;
         cout << "JIT time: " << jit_time << " ms" << endl;
         cout << "Execution time: " << execution_time<< " ms" << endl;
         cout << "GC ran: " << gc_count << " time(s)" << endl;
         cout << "  Collected: " << gc_collected << " cells" << endl;
-        cout << "Environment pointer: " << jit_env_ptr << endl;
+        cout << "Environment pointer: " << env_ptr << endl;
         cout << "Stack size: " << stack_ptr << endl;
         cout << "Memory size: " << heap_ptr - offset << endl;
         cout << "Stack:" <<  endl;
         for (int i = stack_ptr - 1; i >= 0; --i)
             cout << "    " << stack[i].pp() << endl;
-        // cout << "Memory:" << endl;       
+        // cout << "Memory:" << endl;
         // for (int i = offset; i < heap_ptr; ++i)
         //     cout << "    " << heap[i].pp() << endl;
     }
@@ -512,7 +521,7 @@ struct VM
 
     void gc()
     {
-        size_t unused = gc_mark();
+        const size_t unused = gc_mark();
         gc_collected += unused;
         gc_scavenge();
         gc_count += 1;
@@ -520,11 +529,6 @@ struct VM
 
     void init_jit()
     {
-        stack.resize(STACK_SIZE);
-        heap.resize(MEMORY_SIZE);
-        env_ptr = 1;
-        stack_ptr = 0;
-        heap_ptr = 2; // 0 - nil, 1 - global env, 2 - user data
         ctx = jit_context_create();
         jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_void, nullptr, 0, 1);
         main = jit_function_create(ctx, signature);
@@ -558,8 +562,6 @@ struct VM
         env_ptr_const.type = jit_type_void_ptr;
         env_ptr_const.un.ptr_value = &env_ptr;
         jit_env_ptr = jit_value_create_constant(main, &env_ptr_const);
-        // create default env
-        heap[1] = Cell::make_pair(0, 0);
     }
 
     void prepare_jump_table(const std::vector<std::string>& program)
@@ -983,7 +985,7 @@ int main()
     std::vector<std::string> program;
     while (std::getline(std::cin, line))
        program.push_back(line);
-    vm.init_jit();
+    // vm.init_jit();
     vm.run(program);
     vm.debug();
     return 0;    

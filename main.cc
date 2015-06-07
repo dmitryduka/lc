@@ -838,9 +838,8 @@ int main() {
 */
 
 
-    parse_list("(define l1 (cons 0 (cons 2 (gen1 107))))").compile(program, functions);
-    parse_list("(define l2 (otloop l1 0 108))").compile(program, functions);
-    parse_list("(apply prnel (car l2))").compile(program, functions);
+    parse_list("(define l1 (cons 0 (cons 2 (gen1 17))))").compile(program, functions);
+    parse_list("(otloop l1 0 18)").compile(program, functions);
     parse_list("(print)").compile(program, functions);
     parse_list("(gc)").compile(program, functions);
     program.push_back("FIN");
