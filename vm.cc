@@ -43,7 +43,7 @@ std::string data_to_string(const T& x)
     return "Unknown";
 }
 
-struct JitCell
+struct Cell
 {
     struct
     {
@@ -70,32 +70,32 @@ struct JitCell
             uint64_t                as64;
         };
     } __attribute__((packed));
-    JitCell() : as64(0) { }
-    JitCell(uint64_t x) : as64(x) { }
-    static JitCell make_integer(int x) { JitCell r; r.type = Int; r.integer = x; return r; }
-    static JitCell make_nil() { JitCell r; r.type = Nil; return r; }
-    static JitCell make_string(const std::string& x) { 
-        JitCell r;
+    Cell() : as64(0) { }
+    Cell(uint64_t x) : as64(x) { }
+    static Cell make_integer(int x) { Cell r; r.type = Int; r.integer = x; return r; }
+    static Cell make_nil() { Cell r; r.type = Nil; return r; }
+    static Cell make_string(const std::string& x) { 
+        Cell r;
         r.type = String; 
         for (int i = 0; i < sizeof(string) - 1; ++i)
             if (x[i]) r.string[i] = x[i];
             else break;
         return r;
     }
-    static JitCell make_lambda(uint32_t addr, uint32_t env) 
+    static Cell make_lambda(uint32_t addr, uint32_t env) 
     { 
-        JitCell r; 
+        Cell r; 
         r.type = Lambda; 
         r.lambda_addr = addr; 
         r.lambda_env = env; 
         return r; 
     }
-    static JitCell make_pair(uint32_t x, uint32_t y) { JitCell r; r.type = Pair; r.left = x; r.right = y; return r; }
+    static Cell make_pair(uint32_t x, uint32_t y) { Cell r; r.type = Pair; r.left = x; r.right = y; return r; }
 
     std::string pp() { return type_to_string(static_cast<CellType>(type)) + " : " + data_to_string(*this); }
 }  __attribute__((packed));
 
-void jit_vm_print_cell(const JitCell& cell)
+void jit_vm_print_cell(const Cell cell)
 {
     if (cell.type == Int) cout << cell.integer << std::flush;
     else if (cell.type == String) cout << cell.string << std::flush;
@@ -107,8 +107,8 @@ void jit_vm_gc(VM* vm);
 struct VM
 {
     // VM vars
-    std::vector<JitCell> stack;
-    std::vector<JitCell> heap;
+    std::vector<Cell> stack;
+    std::vector<Cell> heap;
     uint32_t stack_ptr;
     uint32_t heap_ptr;
     uint32_t env_ptr;
@@ -156,7 +156,7 @@ struct VM
     int get_env_size() 
     { 
         int c = 0; 
-        JitCell* cur = &heap[env_ptr]; 
+        Cell* cur = &heap[env_ptr]; 
         while (1) { 
             if (heap[cur->left].as64 == 0) break;
             cur = &heap[cur->right]; 
@@ -212,41 +212,41 @@ struct VM
         if (op == "PRN")
         {
             if (stack_ptr < 1) return panic(op, "Not enough elements on the stack");
-            JitCell x = stack[stack_ptr - 1];
+            Cell x = stack[stack_ptr - 1];
             stack_ptr -= 1;
             jit_vm_print_cell(x);
         }
         else if (op == "PRNL")
         {
-            jit_vm_print_cell(JitCell::make_string("\n"));
+            jit_vm_print_cell(Cell::make_string("\n"));
         }
         else if (op == "PUSHCI")
         {
-            stack[stack_ptr] = JitCell::make_integer(std::stoi(tokens[1]));
+            stack[stack_ptr] = Cell::make_integer(std::stoi(tokens[1]));
             stack_ptr += 1;
         }
         else if (op == "PUSHS")
         {
-            stack[stack_ptr] = JitCell::make_string(tokens[1].c_str());
+            stack[stack_ptr] = Cell::make_string(tokens[1].c_str());
             stack_ptr += 1;
         }
         else if (op == "ADD" || op == "SUB" || op == "MUL" || op == "DIV" || op == "MOD")
         {
             if (stack_ptr < 2) return panic(op, "Not enough elements on the stack");
-            JitCell x = stack[stack_ptr - 1];
-            JitCell y = stack[stack_ptr - 2];
+            Cell x = stack[stack_ptr - 1];
+            Cell y = stack[stack_ptr - 2];
             stack_ptr -= 2;
             if (x.type != Int || y.type != Int) return panic(op, "Type mismatch");
-            if (op == "ADD") stack[stack_ptr++] = JitCell::make_integer(y.integer + x.integer);
-            else if (op == "SUB") stack[stack_ptr++] = JitCell::make_integer(y.integer - x.integer);
-            else if (op == "MUL") stack[stack_ptr++] = JitCell::make_integer(y.integer * x.integer);
-            else if (op == "DIV") stack[stack_ptr++] = JitCell::make_integer(y.integer / x.integer);
-            else if (op == "MOD") stack[stack_ptr++] = JitCell::make_integer(y.integer % x.integer);
+            if (op == "ADD") stack[stack_ptr++] = Cell::make_integer(y.integer + x.integer);
+            else if (op == "SUB") stack[stack_ptr++] = Cell::make_integer(y.integer - x.integer);
+            else if (op == "MUL") stack[stack_ptr++] = Cell::make_integer(y.integer * x.integer);
+            else if (op == "DIV") stack[stack_ptr++] = Cell::make_integer(y.integer / x.integer);
+            else if (op == "MOD") stack[stack_ptr++] = Cell::make_integer(y.integer % x.integer);
         }
         else if (op == "DEF")
         {
             if (!stack_ptr) return panic(op, "Not enough elements on the stack");
-            JitCell xy = stack[stack_ptr - 1];
+            Cell xy = stack[stack_ptr - 1];
             stack_ptr -= 1;
             heap[heap_ptr] = xy;
            	heap[heap_ptr + 1] = heap[env_ptr];
@@ -270,189 +270,130 @@ struct VM
         {
             if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");            
             // migrate left and right from stack to memory
-            const JitCell x = stack[stack_ptr - 1];
-            const JitCell y = stack[stack_ptr - 2];
+            const Cell x = stack[stack_ptr - 1];
+            const Cell y = stack[stack_ptr - 2];
             stack_ptr -= 2;
             heap[heap_ptr] = x; 
             heap[heap_ptr + 1] = y;
             heap_ptr += 2;
-            stack[stack_ptr++] = JitCell::make_pair(heap_ptr - 2, heap_ptr - 1);
+            stack[stack_ptr++] = Cell::make_pair(heap_ptr - 2, heap_ptr - 1);
         }
-        // else if (op == "PUSHCAR")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     //if (stack.back().type != Pair) return panic(op, "Type mismatch");
-        //     if (stack.back().type == Int || 
-        //         stack.back().type == String ||
-        //         stack.back().type == Nil)                 
-        //         stack.push_back(stack.back());
-        //     if (stack.back().left)
-        //         stack.push_back(*stack.back().left);
-        //     else
-        //         stack.push_back(Cell::make_nil());
-        // }
-        // else if (op == "PUSHCDR")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     //if (stack.back().type != Pair) return panic(op, "Type mismatch");
-        //     if (stack.back().type == Int || 
-        //         stack.back().type == String ||
-        //         stack.back().type == Nil)                 
-        //         stack.push_back(Cell::make_nil());
-        //     if (stack.back().right)
-        //         stack.push_back(*stack.back().right);
-        //     else
-        //         stack.push_back(Cell::make_nil());
-        // }
-        // else if (op == "EQ")
-        // {
-        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-        //     Cell x = stack.back(); stack.pop_back();
-        //     Cell y = stack.back(); stack.pop_back();
-        //     if (x.type != y.type) return panic(op, "Type mismatch");
-        //     if (x.type == Int)
-        //     {
-        //         if (x.integer == y.integer) stack.push_back(Cell::make_integer(1));
-        //         else stack.push_back(Cell::make_integer(0));
-        //     }
-        //     else if (x.type == String)
-        //     {
-        //         if (std::string(x.string) == std::string(y.string)) 
-        //             stack.push_back(Cell::make_integer(1));
-        //         else stack.push_back(Cell::make_integer(0));
-        //     }
-        //     else if (x.type == Nil)
-        //         stack.push_back(Cell::make_integer(1));
-        //     else if (x.type == Lambda)
-        //     {
-        //         if (x.lambda_addr == y.lambda_addr) stack.push_back(Cell::make_integer(1));
-        //         else stack.push_back(Cell::make_integer(0));
-        //     }
-        //     else return panic(op, "Comparing pairs is not supported");
-        // }
-        // else if (op == "LT")
-        // {
-        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-        //     Cell x = stack.back(); stack.pop_back();
-        //     Cell y = stack.back(); stack.pop_back();
-        //     if (x.type != y.type) return panic(op, "Type mismatch");
-        //     if (x.type == Int)
-        //     {
-        //         if (y.integer < x.integer) stack.push_back(Cell::make_integer(1));
-        //         else stack.push_back(Cell::make_integer(0));
-        //     }
-        //     else return panic(op, "Type mismatch");
-        // }
-        // else if (op == "EQT")
-        // {
-        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
-        //     Cell& x = stack[stack.size() - 1];
-        //     Cell& y = stack[stack.size() - 2];
-        //     if (x.type == y.type) stack.push_back(Cell::make_integer(1));
-        //     else stack.push_back(Cell::make_integer(0));            
-        // }
-        // else if (op == "EQSI")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     if (stack.back().type != String) return panic(op, "Type mismatch");
-        //     stack.push_back(Cell::make_integer(tokens[1] == stack.back().string ? 1 : 0));            
-        // }
-        // else if (op == "RJNZ")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     if (stack.back().type != Int) return panic(op, "Type mismatch");
-        //     if (stack.back().integer)
-        //     {
-        //         pc += std::stoi(tokens[1]);
-        //         dont_step_pc = true;
-        //     }
-        // }
-        // else if (op == "RJZ")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     if (stack.back().type != Int) return panic(op, "Type mismatch");
-        //     if (!stack.back().integer)
-        //     {
-        //         pc += std::stoi(tokens[1]);
-        //         dont_step_pc = true;
-        //     }
-        // }
-        // else if (op == "RJMP")
-        // {
-        //     pc += std::stoi(tokens[1]);
-        //     dont_step_pc = true;
-        // }
-        // else if (op == "JMP")
-        // {
-        //     pc = std::stoi(tokens[1]);
-        //     dont_step_pc = true;
-        // }
-        // else if (op == "PUSHNIL")
-        // {
-        //     stack.push_back(Cell::make_nil());
-        // }
-        // else if (op == "PUSHPC")
-        // {
-        //     stack.push_back(Cell::make_integer(pc));
-        // }
-        // else if (op == "PUSHL")
-        // {
-        //     Cell l = Cell::make_lambda(std::stoi(tokens[1]));
-        //     l.lambda_env = env;
-        //     stack.push_back(l);
-        // }
-        // else if (op == "PUSHFS")
-        // {
-        //     stack.push_back(stack[stack.size() - std::stoi(tokens[1]) - 1]);
-        // }
-        // else if (op == "FIN")
-        // {
-        //     stop = true;
-        // }
-        // else if (op == "CALL")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     if (stack.back().type != Lambda) return panic(op, "Type mismatch");
-        //     int old_pc = pc;
-        //     pc = stack.back().lambda_addr;
-        //     Cell oldenv = *env;
-        //     if (stack.back().lambda_env) env = stack.back().lambda_env;
-        //     else return panic(op, "Lambda has no bound env");
-        //     stack.pop_back();            
-        //     stack.push_back(Cell::make_integer(old_pc + 1));
-        //     stack.push_back(oldenv);
-        //     dont_step_pc = true;                        
-        // }
-        // else if (op == "RET")
-        // {
-        //     // migrate env from stack to memory
-        //     Cell e = stack.back(); stack.pop_back();
-        //     memory.push_back(e);
-        //     env = &memory.back();
-        //     pc = stack.back().integer; stack.pop_back();
-        //     dont_step_pc = true;
-        // }
-        // else if (op == "POP")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     stack.pop_back();
-        // }
-        // else if (op == "CAR")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     if (stack.back().type != Pair) return panic(op, "Type mismatch");
-        //     stack.back() = *stack.back().left;
-        // }
-        // else if (op == "CDR")
-        // {
-        //     if (stack.empty()) return panic(op, "Empty stack");
-        //     if (stack.back().type != Pair) return panic(op, "Type mismatch");
-        //     stack.back() = *stack.back().right;
-        // }
+        else if (op == "PUSHCAR" || op == "PUSHCDR")
+        {
+            if (!stack_ptr) return panic(op, "Empty stack");
+            const Cell& cell = stack[stack_ptr - 1];
+            if (cell.type != Pair) return panic(op, "Type mismatch");
+            if (op == "PUSHCAR" && stack[stack_ptr - 1].left)
+                stack[stack_ptr++] = heap[stack[stack_ptr - 1].left];
+            else if (op == "PUSHCAR" && stack[stack_ptr - 1].right)
+                stack[stack_ptr++] = heap[stack[stack_ptr - 1].right];
+            else stack[stack_ptr++] = Cell::make_nil();
+        }
+        else if (op == "EQ")
+        {
+            if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");
+            Cell x = stack[stack_ptr - 1];
+            Cell y = stack[stack_ptr - 2];
+            stack_ptr -= 2;
+            if (x.type != y.type) return panic(op, "Type mismatch");
+            if (x.type == Int)
+                stack[stack_ptr++] = Cell::make_integer(x.integer == y.integer);
+            else if (x.type == String)
+                stack[stack_ptr++] = Cell::make_integer(std::string(x.string) == std::string(y.string));
+            else if (x.type == Nil)
+                stack[stack_ptr++] = Cell::make_integer(1);
+            else if (x.type == Lambda)
+                stack[stack_ptr++] = Cell::make_integer(x.lambda_addr == y.lambda_addr);
+            else return panic(op, "Comparing pairs is not supported");
+        }
+        else if (op == "LT")
+        {
+            if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");
+            Cell x = stack[stack_ptr - 1];
+            Cell y = stack[stack_ptr - 2];
+            stack_ptr -= 2;
+            if (x.type != y.type) return panic(op, "Type mismatch");
+            if (x.type == Int) stack[stack_ptr++] = Cell::make_integer(y.integer < x.integer);
+            else return panic(op, "Type mismatch");
+        }
+        else if (op == "EQT")
+        {
+            if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");
+            Cell x = stack[stack_ptr - 1];
+            Cell y = stack[stack_ptr - 2];
+            stack[stack_ptr++] = Cell::make_integer(x.type == y.type);
+        }
+        else if (op == "EQSI")
+        {
+            if (!stack_ptr) return panic(op, "Empty stack");
+            if (stack.back().type != String) return panic(op, "Type mismatch");
+            stack[stack_ptr] = Cell::make_integer(tokens[1] == stack[stack_ptr - 1].string ? 1 : 0);
+            stack_ptr += 1;
+        }
+        else if (op == "RJNZ" || op == "RJZ")
+        {
+            if (!stack_ptr) return panic(op, "Empty stack");
+            Cell& cell = stack[stack_ptr - 1];
+            if (cell.type != Int) return panic(op, "Type mismatch");
+            if ((op == "RJNZ" && cell.integer) ||
+                (op == "RJZ" && !cell.integer))
+            {
+                pc += std::stoi(tokens[1]);
+                dont_step_pc = true;
+            }
+        }
+        else if (op == "RJMP")
+        {
+            pc += std::stoi(tokens[1]);
+            dont_step_pc = true;
+        }
+        else if (op == "JMP")
+        {
+            pc = std::stoi(tokens[1]);
+            dont_step_pc = true;
+        }
+        else if (op == "PUSHNIL") stack[stack_ptr++] = Cell::make_nil();
+        else if (op == "PUSHFS") stack[stack_ptr++] = stack[stack_ptr - std::stoi(tokens[1]) - 1];
+        else if (op == "FIN") stop = true;
+        else if (op == "PUSHL")
+            stack[stack_ptr++] = Cell::make_lambda(std::stoi(tokens[1]), env_ptr);
+        else if (op == "CALL")
+        {
+            if (!stack_ptr) return panic(op, "Empty stack");
+            Cell& cell = stack[--stack_ptr];
+            if (cell.type != Lambda) return panic(op, "Type mismatch");
+            int old_pc = pc;
+            pc = cell.lambda_addr;
+            uint32_t oldenv = env_ptr;
+            if (cell.lambda_env) env_ptr = cell.lambda_env;
+            else return panic(op, "Lambda has no bound env");
+            stack[stack_ptr++] = Cell::make_integer(old_pc + 1);
+            stack[stack_ptr++] = Cell::make_integer(oldenv);
+            dont_step_pc = true;                        
+        }
+        else if (op == "RET")
+        {
+            // migrate env from stack to memory
+            env_ptr = stack[--stack_ptr].integer;
+            pc = stack[--stack_ptr].integer;
+            dont_step_pc = true;
+        }
+        else if (op == "POP")
+        {
+            if (!stack_ptr) return panic(op, "Empty stack");
+            stack_ptr -= 1;
+        }
+        else if (op == "CAR" || op == "CDR")
+        {
+            if (!stack_ptr) return panic(op, "Empty stack");
+            Cell& cell = stack[stack_ptr - 1];
+            if (cell.type != Pair) return panic(op, "Type mismatch");
+            cell = heap[op == "CAR" ? cell.left : cell.right];
+        }
         // else if (op == "SWAP")
         // {
         //     // TODO: check swap argument and issue panic in case needed
-        //     if (stack.size() < 2) return panic(op, "Not enought elements on the stack");
+        //     if (stack_ptr < 2) return panic(op, "Not enought elements on the stack");
         //     Cell tmp = stack.back();
         //     stack.back() = stack[stack.size() - 2 - std::stoi(tokens[1])];
         //     stack[stack.size() - 2 - std::stoi(tokens[1])] = tmp;
@@ -481,10 +422,10 @@ struct VM
         //     cout << "    " << heap[i].pp() << endl;
     }
 
-    void gc_mark_recursive(JitCell& c)
+    void gc_mark_recursive(Cell& c)
     {
         if (c.as64 & 0x8000000000000000ull) return;
-        const JitCell tmp = c;
+        const Cell tmp = c;
         c.as64 |= 0x8000000000000000ull;
         if (tmp.type == Lambda) gc_mark_recursive(heap[tmp.lambda_env]);
         else if (tmp.type == Pair)
@@ -519,10 +460,10 @@ struct VM
         size_t new_heap_ptr = 0;
         const size_t offset = (gc_count & 1) ? 0 : (MEMORY_SIZE >> 1);
         const size_t source_offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
-        JitCell* new_heap = &heap[offset], *cur_heap = new_heap;
+        Cell* new_heap = &heap[offset], *cur_heap = new_heap;
         for (int i = source_offset; i < heap_ptr; ++i)
         {
-            JitCell& cell = heap[i];
+            Cell& cell = heap[i];
             if (cell.as64 & 0x8000000000000000ull)
             {
                 // copy the cell clearing 'reachable' bit
@@ -538,7 +479,7 @@ struct VM
         // stack
         for (int i = 0; i < stack_ptr; ++i)
         {
-            JitCell& cell = stack[i];
+            Cell& cell = stack[i];
             if (cell.type == Pair)
             {
                 cell.left = heap[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
@@ -552,7 +493,7 @@ struct VM
         // heap
         for (int i = 0; i < heap_ptr; ++i)
         {
-            JitCell& cell = *cur_heap++;
+            Cell& cell = *cur_heap++;
             if (cell.type == Pair)
             {
                 cell.left = heap[cell.left].as64 & 0x7FFFFFFFFFFFFFFFull;
@@ -618,7 +559,7 @@ struct VM
         env_ptr_const.un.ptr_value = &env_ptr;
         jit_env_ptr = jit_value_create_constant(main, &env_ptr_const);
         // create default env
-        heap[1] = JitCell::make_pair(0, 0);
+        heap[1] = Cell::make_pair(0, 0);
     }
 
     void prepare_jump_table(const std::vector<std::string>& program)
@@ -708,7 +649,7 @@ struct VM
             jit_value_t val;
             if (op == "PRNL")
             {
-                JitCell newline = JitCell::make_string("\n");
+                Cell newline = Cell::make_string("\n");
                 val = jit_value_create_long_constant(main, jit_type_ulong, newline.as64);
             }
             else
@@ -724,20 +665,20 @@ struct VM
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
             // increment sp
-            JitCell cell;
+            Cell cell;
             jit_value_t cellval;
-            if (op == "PUSHCI") cell = JitCell::make_integer(std::stoi(tokens[1]));
-            else if(op == "PUSHNIL") cell = JitCell::make_nil();
-            else if(op == "PUSHS") cell = JitCell::make_string(tokens[1]);
+            if (op == "PUSHCI") cell = Cell::make_integer(std::stoi(tokens[1]));
+            else if(op == "PUSHNIL") cell = Cell::make_nil();
+            else if(op == "PUSHS") cell = Cell::make_string(tokens[1]);
             else if(op == "PUSHL") 
             {
                 uint32_t lambda_start = std::stoi(tokens[1]);
                 // check if this is a dummy/test lambda for type checking (see EQT)
-                if (lambda_start == -1) cell = JitCell::make_lambda(0, 0);
+                if (lambda_start == -1) cell = Cell::make_lambda(0, 0);
                 else
                 {
                     if (jit_jump_map.count(lambda_start))
-                        cell = JitCell::make_lambda(jit_jump_map[lambda_start], 0);
+                        cell = Cell::make_lambda(jit_jump_map[lambda_start], 0);
                     else panic(op, "Lambda has no entry in the jump table");
                 }            
             }
@@ -786,7 +727,7 @@ struct VM
             else if (op == "EQT") r = jit_insn_eq(main, jit_insn_and(main, v1t, ctypemask), jit_insn_and(main, v2t, ctypemask));
             // and fix type in case result occupies more than 60 bits
             jit_value_t rf = jit_insn_or(main, jit_insn_and(main, r, cdatamask), 
-                                            jit_value_create_long_constant(main, jit_type_ulong, JitCell::make_integer(0).as64));
+                                            jit_value_create_long_constant(main, jit_type_ulong, Cell::make_integer(0).as64));
             // store value on top of the stack
              // EQT operations doesn't pop operands from stack
             if (op == "EQT") v2_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8));
@@ -885,7 +826,7 @@ struct VM
         }
         else if (op == "EQSI")
         {
-            JitCell cell = JitCell::make_string(tokens[1]);
+            Cell cell = Cell::make_string(tokens[1]);
             // load a value from the top of the stack
             jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp_v1 = jit_insn_add(main, sp, cm1);
