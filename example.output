@@ -1,15 +1,18 @@
-javol@timelinex:~/devel/lc$ ./main | ./vm
-271828182845904523536028747135266249775724709369995957496696762772407663035354759457138217852516642
-Nil
+javol@timelinex:~/devel/lc$ ./main | ./vm -j
+27182818284590452353602874713
 
-Time: 11008 ms
-Environent pointer: 1
-Stack size: 21
-Memory size: 29481653
+PC: 2679
+JIT time: 162 ms
+Execution time: 529 ms
+GC ran: 118 time(s)
+  Collected: 1364334 cells
+Environment pointer: 1
+Stack size: 22
+Memory size: 154
 Stack:
     Nil : Unknown
     Nil : Unknown
-    String : l2
+    Nil : Unknown
     String : l1
     String : otloop
     String : mnloop
@@ -25,9 +28,42 @@ Stack:
     String : prnel
     String : apply
     String : append
+    String : not
     String : rest
     String : first
     String : atom?
-Garbage collecting: 1 cells
-  Found orphaned cells: 1
-  Found used cells: 0
+
+javol@timelinex:~/devel/lc$ ./main | ./vm
+27182818284590452353602874713
+
+PC: 134
+JIT time: 0 ms
+Execution time: 155496 ms
+GC ran: 59 time(s)
+  Collected: 1364334 cells
+Environment pointer: 25001
+Stack size: 22
+Memory size: 154
+Stack:
+    Nil : Unknown
+    Nil : Unknown
+    Nil : Unknown
+    String : l1
+    String : otloop
+    String : mnloop
+    String : inloop
+    String : gen1
+    String : setnth
+    String : stnaux
+    String : firstn
+    String : fstnax
+    String : nth
+    String : nthaux
+    String : length
+    String : prnel
+    String : apply
+    String : append
+    String : not
+    String : rest
+    String : first
+    String : atom?

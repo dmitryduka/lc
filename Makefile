@@ -1,9 +1,9 @@
-WITHJIT=0
+WITHJIT=1
 
 all: main vm
 
 main: main.cc
-	g++ -std=c++11 -g main.cc -o main
+	g++ -std=c++11 -O3 main.cc -o main
 vm: vm.cc
 	mkdir -p build
 ifeq ($(WITHJIT),1)

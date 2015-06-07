@@ -443,8 +443,8 @@ int main() {
 
 */
 
-    parse_list("(define l1 (cons 0 (cons 2 (gen1 17))))").compile(program, functions);
-    parse_list("(otloop l1 0 18)").compile(program, functions);
+    parse_list("(define l1 (cons 0 (cons 2 (gen1 37))))").compile(program, functions);
+    parse_list("(otloop l1 0 38)").compile(program, functions);
     parse_list("(print)").compile(program, functions);
     parse_list("(gc)").compile(program, functions);
     program.push_back("FIN");

@@ -5,6 +5,7 @@
 #include <sstream>
 #include <fstream>
 #include <chrono>
+#include <cstring>
 
 #if WITH_JIT
 #include <jit/jit.h>
@@ -980,7 +981,7 @@ void jit_vm_gc(VM* vm) { vm->gc(); }
 
 VM vm;
 
-int main()
+int main(int argc, char** argv)
 {    
     signal(SIGINT, [](int) { vm.debug(); exit(1); });
 
@@ -989,7 +990,7 @@ int main()
     while (std::getline(std::cin, line))
        program.push_back(line);
 #if WITH_JIT
-    vm.init_jit();
+    if (argc > 1 && strcmp(argv[1],"-j") == 0) vm.init_jit();
 #endif
     vm.run(program);
     vm.debug();
