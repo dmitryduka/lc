@@ -6,8 +6,10 @@
 #include <fstream>
 #include <chrono>
 
+#if WITH_JIT
 #include <jit/jit.h>
 #include <jit/jit-dump.h>
+#endif
 
 #include <signal.h>
 
@@ -95,7 +97,7 @@ struct Cell
     std::string pp() { return type_to_string(static_cast<CellType>(type)) + " : " + data_to_string(*this); }
 }  __attribute__((packed));
 
-void jit_vm_print_cell(const Cell cell)
+void vm_print_cell(const Cell cell)
 {
     if (cell.type == Int) cout << cell.integer << std::flush;
     else if (cell.type == String) cout << cell.string << std::flush;
@@ -121,6 +123,7 @@ struct VM
     size_t execution_time;
     uint32_t gc_count;
     uint32_t gc_collected;
+#if WITH_JIT
     // jit
     jit_context_t ctx;
     jit_function_t main;
@@ -133,13 +136,16 @@ struct VM
     std::map<size_t, size_t> jit_jump_map;
     std::vector<jit_label_t> jit_jump_table;
     uint32_t jit_jump_table_current_index;
+#endif
 
     VM() :  stop(false), 
             pc(0), 
             ticks(0), 
             stack_historic_max_size(0), 
+#if WITH_JIT
             ctx(nullptr),
             jit_jump_table_current_index(0),
+#endif
             gc_count(0),
             gc_collected(0)
     { 
@@ -154,19 +160,9 @@ struct VM
 
     ~VM()
     {
+#if WITH_JIT
         if (ctx) jit_context_destroy(ctx);
-    }
-
-    int get_env_size() 
-    { 
-        int c = 0; 
-        Cell* cur = &heap[env_ptr]; 
-        while (1) { 
-            if (heap[cur->left].as64 == 0) break;
-            cur = &heap[cur->right]; 
-            c++; 
-        } 
-        return c; 
+#endif
     }
 
     void panic(const std::string& op, const std::string& text) { cout << "PANIC: " << op << ", " << text << endl; stop = true; }
@@ -184,14 +180,23 @@ struct VM
     {
         pc = 0;
         auto start = std::chrono::steady_clock::now();
+#if WITH_JIT
         if (ctx) prepare_jump_table(program);
+#endif
         while (pc < program.size())
         {
+#if WITH_JIT
             if(ctx) step_jit(program[pc]);
-            else step_interpret(program[pc]);
-            stack_historic_max_size = stack.size() > stack_historic_max_size ? stack.size() : stack_historic_max_size;
+            else 
+#endif
+                step_interpret(program[pc]);
+#if WITH_JIT
+            if (!ctx)
+#endif
+                stack_historic_max_size = stack.size() > stack_historic_max_size ? stack.size() : stack_historic_max_size;
             if (stop) break;
         }
+#if WITH_JIT
         if (ctx)
         {
             jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
@@ -204,6 +209,7 @@ struct VM
             execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
         }
         else
+#endif
         {
             auto diff = std::chrono::steady_clock::now() - start;
             execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
@@ -221,17 +227,17 @@ struct VM
         if (op == "CONS" || op == "DEF" || op == "STOREENV")
         {
             const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
-            if (heap_ptr - offset > (MEMORY_SIZE >> 1) - 3) gc();
+            if ((heap_ptr - offset) > ((MEMORY_SIZE >> 1) - 3)) gc();
         }
 
         if (op == "GC") gc();
         else if (op == "PRN")
         {
             if (stack_ptr < 1) return panic(op, "Not enough elements on the stack");
-            jit_vm_print_cell(stack[--stack_ptr]);
+            vm_print_cell(stack[--stack_ptr]);
         }
         else if (op == "PRNL")
-            jit_vm_print_cell(Cell::make_string("\n"));
+            vm_print_cell(Cell::make_string("\n"));
         else if (op == "PUSHCI")
             stack[stack_ptr++] = Cell::make_integer(std::stoi(tokens[1]));
         else if (op == "PUSHS")
@@ -346,11 +352,6 @@ struct VM
         else if (op == "RJMP")
         {
             pc += std::stoi(tokens[1]);
-            dont_step_pc = true;
-        }
-        else if (op == "JMP")
-        {
-            pc = std::stoi(tokens[1]);
             dont_step_pc = true;
         }
         else if (op == "PUSHNIL") stack[stack_ptr++] = Cell::make_nil();
@@ -527,6 +528,7 @@ struct VM
         gc_count += 1;
     }
 
+#if WITH_JIT
     void init_jit()
     {
         ctx = jit_context_create();
@@ -572,7 +574,7 @@ struct VM
             auto tokens = tokenize(instr);
             const auto& x = tokens[0];
             if (x == "CALL" || x == "RET" || x == "FIN" ||
-                x == "RJMP" || x == "JMP" || x == "RJNZ" || x == "RJZ")
+                x == "RJMP" || x == "RJNZ" || x == "RJZ")
             {
                 int jpc = 0;
                 if (x == "CALL" || x == "RET" || x == "FIN") jpc = local_pc + 1;
@@ -662,7 +664,7 @@ struct VM
                 jit_insn_store_relative(main, jit_stack_ptr, 0, sp1);
                 val = jit_insn_load_relative(main, sp_addr, 0, jit_type_ulong);
             }
-            jit_insn_call_native(main, "print", reinterpret_cast<void*>(&jit_vm_print_cell), signature, &val, 1, JIT_CALL_NOTHROW);
+            jit_insn_call_native(main, "print", reinterpret_cast<void*>(&vm_print_cell), signature, &val, 1, JIT_CALL_NOTHROW);
         }
         else if (op == "PUSHCI" || op == "PUSHNIL" || op == "PUSHS" || op == "PUSHL")
         {
@@ -971,6 +973,7 @@ struct VM
         else panic(op, "JIT: not implemented");
         pc += 1;
     }
+#endif
 };
 
 void jit_vm_gc(VM* vm) { vm->gc(); }
@@ -985,7 +988,9 @@ int main()
     std::vector<std::string> program;
     while (std::getline(std::cin, line))
        program.push_back(line);
-    // vm.init_jit();
+#if WITH_JIT
+    vm.init_jit();
+#endif
     vm.run(program);
     vm.debug();
     return 0;    
