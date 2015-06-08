@@ -202,17 +202,17 @@ struct VM
             jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
             jit_function_compile(main);
             jit_int result = 0;
-            jit_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            jit_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
             auto start = std::chrono::steady_clock::now();
             jit_function_apply(main, nullptr, &result);
             auto diff = std::chrono::steady_clock::now() - start;
-            execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
+            execution_time = std::chrono::duration_cast<std::chrono::microseconds>(diff).count();
         }
         else
 #endif
         {
             auto diff = std::chrono::steady_clock::now() - start;
-            execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
+            execution_time = std::chrono::duration_cast<std::chrono::microseconds>(diff).count();
         }     
     }
 
@@ -417,8 +417,8 @@ struct VM
         // jit_dump_function(stdout, main, "program");
         const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
         cout << "PC: " << pc << endl;
-        cout << "JIT time: " << jit_time << " ms" << endl;
-        cout << "Execution time: " << execution_time<< " ms" << endl;
+        cout << "JIT time: " << jit_time << " us" << endl;
+        cout << "Execution time: " << execution_time<< " us" << endl;
         cout << "GC ran: " << gc_count << " time(s)" << endl;
         cout << "  Collected: " << gc_collected << " cells" << endl;
         cout << "Environment pointer: " << env_ptr << endl;
