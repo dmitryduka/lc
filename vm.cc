@@ -1,13 +1,12 @@
 #include <iostream>
-#include <vector>
-#include <map>
-#include <cstdint>
 #include <sstream>
 #include <fstream>
-#include <chrono>
 #include <cstring>
+#include <vector>
+#include <chrono>
 
 #if WITH_JIT
+#include <map>
 #include <jit/jit.h>
 #include <jit/jit-dump.h>
 #endif

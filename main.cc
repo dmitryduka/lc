@@ -1,20 +1,13 @@
 #include <iostream>
 #include <fstream>
-#include <vector>
-#include <set>
 #include <sstream>
+#include <vector>
 #include <memory>
-#include <unordered_map>
-#include <algorithm>
 #include <chrono>
-
-struct Env;
 
 using std::cout;
 using std::endl;
 using std::shared_ptr;
-
-std::set<Env*> envs;
 
 struct Cell
 {
