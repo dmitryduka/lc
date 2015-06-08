@@ -345,6 +345,28 @@ void link(std::vector<std::string>& program,
     }
 }
 
+
+std::vector<std::string> cond_optimize(std::vector<std::string>& f)
+{
+    return f;
+}
+
+std::vector<std::string> funarg_optimize(std::vector<std::string>& f)
+{
+    return f;
+}
+// cond optimization: eliminate (PUSHCI 1, RJZ, POP)
+// functions argument optimization: eliminate defining/searching for arguments in the env
+void optimize(std::vector<std::string>& program,
+                std::vector<std::vector<std::string>>& functions)
+{
+    for (auto& func : functions)
+    {
+        func = cond_optimize(func);
+        func = funarg_optimize(func);
+    }
+}
+
 int main()
 {
     std::vector<std::string> program;
@@ -441,6 +463,7 @@ int main() {
     parse_list("(print)").compile(program, functions);
     parse_list("(gc)").compile(program, functions);
     program.push_back("FIN");
+    optimize(program, functions);
     link(program, functions);
     for (auto x : program)
         cout << x << endl;

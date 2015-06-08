@@ -407,6 +407,9 @@ struct VM
             stack[stack_ptr - 1] = stack[elno];
             stack[elno] = tmp;
         }
+        else if (op == "NOP")
+        {
+        }
         if (!dont_step_pc) pc += 1;
         ticks += 1;
     }
