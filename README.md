@@ -28,10 +28,9 @@ returns Cell object which contains a list of other Cell objects, thus representi
 ```
 +-*/%, less, eq, cons, car, cdr, define, func?, str?, int?, null?, begin, cond, lambda and gc
 ```
-Contains example program implementing 'e' constant first 30 digits computation.
 ### *vm.cc*: 
 Either interprets bytecode directly (no **-j** command argument) or generates x86 native code using libjit (-j command argument).
 VM class represent a virtual machine with _stack_, _heap_ and special _'env'_ pointer register. Sizes of both stack and heap are hard-coded in the beginning of *vm.cc*. VM class contains 2 functions to execute the code - step_interpret and step_jit. Both are called from VM::run functionb for each instruction. **VM::step_interpret** function interprets an instruction and returns while step_jit generates a piece of code which upon the end of input should be compiled and executed in **VM::run** function (after all instruction were consumed). VM class implements simple garbage collection, stop-and-collect, mark-and-sweep algorithm which moves/compacts used cells from one half of the heap to another. Only 3 instructions could lead to heap growth - **CONS**, **DEF** and **STOREENV**, thus both step_interpret and step_jit check if heap pointer is approaching the end of current half of the heap and call **VM::gc()** automatically. Alternatively it's possible to run gc manually by calling **(gc)** special form or generating **GC** instruction.
 
 ### Usage example: 
-./main | ./vm -j
+./main < edigits.lsp | ./vm -j
