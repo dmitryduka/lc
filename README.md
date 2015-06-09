@@ -20,6 +20,9 @@ Cell types: Nil, Pair, Int, String, Lambda
 * InstructionPointer and Environment special types are used because CALL and RET instruction save/restore a return address and environment pointer on/from the same stack where the actual data belongs.
 
 ### *main.cc*: 
+
+Because cell of type string can only contain a maximum of 6 characters (+ trailing zero), there is a limitation on a symbol name length (6 bytes). Of course, it should be possible to mangle/shorten names during compilation or support constant pools in the VM, but it's not done.
+
 Compiles pseduo-lisp code to bytecode
 ```
 parse_list("(+ 2 (- 3 1))") 
