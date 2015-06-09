@@ -292,7 +292,7 @@ Cell parse_list(const char* input, const char** jumped_to = NULL)
                     // issue error in case symbol size is more than 7 characters:
                     // it wont fit into the Cell in the VM
                     // TODO: mangle names to shorter strings
-                    // if (symbol.size() > 7) { std::cout << "Long names are not supported: " << symbol << endl; exit(1); }
+                    if (symbol.size() > 7) { std::cout << "Long names are not supported: " << symbol << endl; exit(1); }
                     cell.list.push_back(Cell(symbol));
                     symbol_ready = false;
                     symbol.clear();
