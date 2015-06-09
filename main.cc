@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -404,6 +405,7 @@ std::vector<std::string> funarg_optimize(const std::vector<std::string>& f)
 {
     return f;
 }
+
 // cond optimization: eliminate (PUSHCI 1, RJZ, POP)
 // functions argument optimization: eliminate defining/searching for arguments in the env
 void optimize(std::vector<std::string>& program,
@@ -423,105 +425,50 @@ void optimize(std::vector<std::string>& program,
     cerr << "funarg_optimized: removed " << funarg_removed_instructions << " instructions" << endl;
 }
 
+std::vector<std::string> break_into_forms(const std::vector<std::string>& input)
+{
+    std::string p = std::accumulate(input.begin(), input.end(), std::string(""));
+    std::vector<std::string> result;
+    size_t bracket_count = 0;
+    std::string form;
+    char prevc = 'x'; // any non whitespace character will do
+    for (auto c : p)
+    {
+        if ((isspace(c) && !isspace(prevc)) || !isspace(c)) form += c;
+        if (c == '(') bracket_count += 1;
+        else if (c == ')') bracket_count -= 1;
+
+        if (!bracket_count && !form.empty())
+        {
+            result.push_back(form);
+            form.clear();
+        }
+        prevc = c;
+    }
+    return result;
+}
+
 int main(int argc, char** argv)
 {
+    // read input program
+    std::string line;
+    std::vector<std::string> input;
+    while (std::getline(std::cin, line))
+       input.push_back(line);
+    // reorganize input to have each form on the separate line
+    input = break_into_forms(input);
     std::vector<std::string> program;
     std::vector<std::vector<std::string>> functions;
-    parse_list("(define atom? (lambda (x) (cond (null? x) 1 \
-    											(func? x) 1 \
-    											(str? x) 1 \
-    											(int? x) 1 \
-    											(1) 0)))").compile(program, functions);
-    parse_list("(define first (lambda (x) (cond (atom? x) x (1) (car x))))").compile(program, functions);
-    parse_list("(define rest  (lambda (x) (cond (atom? x) Nil (1) (cdr x))))").compile(program, functions);
-    // // parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
-    parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
-    // parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
-    // parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
-    // parse_list("(define add (lambda (x y) (+ x y)))").compile(program, functions);
-    parse_list("(define append (lambda (x y) (cond (null? x) y \
-                                                (1) (cons (first x) (append (rest x) y)))))").compile(program, functions);
-    parse_list("(define apply (lambda (f l) (cond (atom? l) (f l) (1) (begin (f (first l)) (apply f (rest l))))))").compile(program, functions);
-    // parse_list("(define accum (lambda (op start l) \
-    //                                   (cond (null? l) start \
-    //                                         (1) (op (car l) (accum op start (cdr l))))))").compile(program, functions);
-    // parse_list("(define reverse (lambda (l) (begin \
-    // 											(define rev-aux (lambda (x y) \
-    // 																		(cond (null? x) y \
-    // 											      							  (1) (rev-aux \
-    // 																			   			(rest x) \
-    // 																			   			(cons \
-    // 																			   				(first x) \
-    // 																			   				y))))) \
-    // 											(rev-aux l Nil))))").compile(program, functions);
-    // parse_list("(define filter (lambda (pred l) \
-    //                                     (cond (null? l) Nil \
-    //                                           (1) (append (cond (pred (first l)) (first l) \
-    //                                                             (1) Nil) \
-    //                                                       (filter pred (rest l))))))").compile(program, functions);
-    // parse_list("(define qsort (lambda (l) (begin (define f (first l)) \
-    //                                              (define r (rest l)) \
-    //                                              (define <= (lambda (x) (lambda (y) (cond (eq x y) 1 \
-    //                                                                                       (less y x) 1 \
-    //                                                                                       (1) 0)))) \
-    //                                              (define > (lambda (x) (lambda (y) (cond (not (eq x y)) (cond (not (less y x)) 1 \
-    //                                                                                            					   (1) 0) \
-    //                                                                                      (1) 0)))) \
-    //                                              (cond (null? l) Nil \
-    //                                                    (null? f) Nil \
-    //                                                    (null? r) f \
-    //                                                    (1) (append (qsort (filter (<= f) r)) \
-    //                                                                (append f (qsort (filter (> f) r))))))))").compile(program, functions);
-    // parse_list("(define map (lambda (f l) (cond (null? l) Nil (1) (append (f (first l)) (map f (rest l))))))").compile(program, functions);
-    // parse_list("(define faux (lambda (x a) (cond (eq x 1) a (1) (faux (- x 1) (* x a)))))").compile(program, functions);
-    // parse_list("(define factl (lambda (x) (faux x 1)))").compile(program, functions);
-    parse_list("(define prnel (lambda (x) (begin (print x) (print))))").compile(program, functions);
-    parse_list("(define length (lambda (l) (cond (null? l) 0 (atom? l) 1 (1) (+ 1 (length (rest l))))))").compile(program, functions);
-    // get nth element
-    parse_list("(define nthaux (lambda (c n l) (cond (eq n c) (first l) (1) (cond (atom? l) Nil (1) (nthaux (+ c 1) n (rest l))))))").compile(program, functions);
-    parse_list("(define nth (lambda (n l) (nthaux 0 n l)))").compile(program, functions);
-    // set nth element
-    parse_list("(define fstnax (lambda (c n l) (cond (eq n c) (first l) (1) (cons (first l) (fstnax (+ c 1) n (rest l))))))").compile(program, functions);
-    parse_list("(define firstn (lambda (n l) (fstnax 1 n l)))").compile(program, functions);
-    parse_list("(define stnaux (lambda (c n l v) (cond (eq n c) (cond (atom? l) v (1) (cons v (rest l))) (1) (cond (atom? l) l (1) (stnaux (+ c 1) n (rest l) v)))))").compile(program, functions);
-    parse_list("(define setnth (lambda (n l x) (append (firstn n l) (stnaux 0 n l x))))").compile(program, functions);
-    // generate a list of elements with given value
-    parse_list("(define gen1 (lambda (x) (cond (eq x 1) 1 (1) (cons 1 (gen1 (- x 1))))))").compile(program, functions);
-    // inner loop, return pair <list, x>
-    parse_list("(define inloop (lambda (l x n) (cons (setnth n l (% x n)) (+ (* 10 (nth (- n 1) l)) (/ x n)))))").compile(program, functions);
-    // main loop
-    parse_list("(define mnloop (lambda (l x n) (cond (eq n 1)  (inloop l x n) (1) (begin (define r (inloop l x n)) (mnloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
-    // outer loop
-    parse_list("(define otloop (lambda (l x n) (cond (eq n 10) (print) (1) (begin (define r (mnloop l x n)) (print (cdr r)) (otloop (car r) (cdr r) (- n 1))))))").compile(program, functions);
-
-/*
-
-int main() {
-      int N = 109, a[109], x;
-      for (int n = N - 1; n > 0; --n) a[n] = 1;
-      a[1] = 2;
-
-      while (N > 9) {
-          int n = N--;
-          while (--n) {
-              a[n] = x % n;
-              x = 10 * a[n-1] + x/n;
-          }
-          printf("%d", x);
-      }
-      return 0;
-  }
-
-*/
-
-    parse_list("(define l1 (cons 0 (cons 2 (gen1 37))))").compile(program, functions);
-    parse_list("(otloop l1 0 38)").compile(program, functions);
-    parse_list("(print)").compile(program, functions);
-    parse_list("(gc)").compile(program, functions);
+    // compile each form
+    for (auto form : input)
+        parse_list(form.c_str()).compile(program, functions);
     program.push_back("FIN");
+    // optionally optimize the program
     if (argc > 1 && strcmp(argv[1],"-o") == 0)
         optimize(program, functions);
+    // link program
     link(program, functions);
+    // print bytecode
     for (auto x : program)
         cout << x << endl;
     return 0;
