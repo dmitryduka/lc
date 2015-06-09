@@ -8,6 +8,7 @@
 #include <cstring>
 
 using std::cout;
+using std::cerr;
 using std::endl;
 using std::shared_ptr;
 
@@ -376,7 +377,6 @@ std::vector<std::string> remove_instructions(std::vector<std::string>& f, size_t
         result[j] = op;
     }
     result.erase(result.begin() + start, result.begin() + start + remove_count);
-    removed_instructions += remove_count;
     return result;
 }
 
@@ -392,6 +392,7 @@ std::vector<std::string> cond_optimize(const std::vector<std::string>& func)
             if (tokens[0] == "PUSHCI" && std::stoi(tokens[1]) > 0)
             {
                 f = remove_instructions(f, i - 2, 3);
+                removed_instructions += 3;
                 i = 2;
             }
         }
@@ -408,18 +409,18 @@ std::vector<std::string> funarg_optimize(const std::vector<std::string>& f)
 void optimize(std::vector<std::string>& program,
                 std::vector<std::vector<std::string>>& functions)
 {
+    size_t cond_removed_instructions = 0, funarg_removed_instructions = 0;
     for (auto& func : functions)
     {
-        func = cond_optimize(func);
-        cout << "cond_optimized: removed " << removed_instructions << " instructions" << endl;
-        while (1)
-        {
-            auto newfunc = funarg_optimize(func);
-            if (newfunc == func) break;
-            func = newfunc;
-        }
-        // cout << "funarg_optimized: removed " << removed_instructions << " instructions" << endl;
+        func = cond_optimize(func); 
+        cond_removed_instructions += removed_instructions;
+        removed_instructions = 0;
+        func = funarg_optimize(func);
+        funarg_removed_instructions += removed_instructions;
+        removed_instructions = 0;
     }
+    cerr << "cond_optimized: removed " << cond_removed_instructions << " instructions" << endl;
+    cerr << "funarg_optimized: removed " << funarg_removed_instructions << " instructions" << endl;
 }
 
 int main(int argc, char** argv)
