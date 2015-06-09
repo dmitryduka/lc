@@ -2,8 +2,10 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <map>
 #include <memory>
 #include <chrono>
+#include <cstring>
 
 using std::cout;
 using std::endl;
@@ -48,7 +50,7 @@ void compile_args(const std::vector<Cell>& list,
                         std::vector<std::string>& program,
                         std::vector<std::vector<std::string>>& functions)
 {
-   for (int i = 1; i < list.size(); ++i)
+   for (size_t i = 1; i < list.size(); ++i)
         list[i].compile(program, functions);
 }
 
@@ -177,7 +179,7 @@ void Cell::compile(std::vector<std::string>& program,
             }
             else if (list[0].name == "begin")
             {
-                for (int i = 1; i < list.size() - 1; ++i)
+                for (size_t i = 1; i < list.size() - 1; ++i)
                 {
                     list[i].compile(program, functions);
 	                program.push_back("POP");      
@@ -188,7 +190,7 @@ void Cell::compile(std::vector<std::string>& program,
             {
                 std::vector<std::vector<std::string>> conditions;
                 std::vector<std::vector<std::string>> results;
-                for (int i = 1; i < list.size(); ++i)
+                for (size_t i = 1; i < list.size(); ++i)
                 {
                     if (i % 2)
                     {
@@ -203,7 +205,7 @@ void Cell::compile(std::vector<std::string>& program,
                         results.push_back(result);
                     }
                 }
-                for (int i = 0; i < conditions.size(); ++i)
+                for (size_t i = 0; i < conditions.size(); ++i)
                 {
                     if (i != 0)
                         program.push_back("POP");
@@ -219,7 +221,7 @@ void Cell::compile(std::vector<std::string>& program,
                     if (i != conditions.size() - 1)
                     {
                         size_t jump = 0;
-                        for (int j = i + 1; j < conditions.size(); ++j)
+                        for (size_t j = i + 1; j < conditions.size(); ++j)
                             jump += conditions[j].size() + results[j].size() + 4;
                         program.push_back("RJMP " + std::to_string(jump));
                     }
@@ -230,7 +232,7 @@ void Cell::compile(std::vector<std::string>& program,
                 // create new environment and bind arguments
                 const size_t args_count = list[1].list.size();
                 std::vector<std::string> func;
-                for (int i = 0; i < args_count; ++i)
+                for (size_t i = 0; i < args_count; ++i)
                 {
                     func.push_back("LOADENV");
                     func.push_back("PUSHFS " + std::to_string(2 + args_count - i)); // 2 - PC and env
@@ -240,7 +242,7 @@ void Cell::compile(std::vector<std::string>& program,
                     func.push_back("STOREENV");
                 }
                 // pop arguments from the stack
-                for (int i = 0; i < args_count; ++i)
+                for (size_t i = 0; i < args_count; ++i)
                 {
                     func.push_back("SWAP 1");
                     func.push_back("POP");
@@ -332,7 +334,7 @@ void link(std::vector<std::string>& program,
         relocs.push_back(program_size);
         program_size += func.size();
     }
-    for (int i = 0; i < relocs.size(); ++i)
+    for (size_t i = 0; i < relocs.size(); ++i)
     {
         for (auto& line : program)
         {
@@ -345,13 +347,59 @@ void link(std::vector<std::string>& program,
     }
 }
 
+static size_t removed_instructions = 0;
 
-std::vector<std::string> cond_optimize(std::vector<std::string>& f)
+std::vector<std::string> remove_instructions(std::vector<std::string>& f, size_t start, size_t remove_count)
 {
+    // array of jumps' line # covering line 'start'
+    std::vector<size_t> jumps;
+    size_t lineno = 0;
+    // fill jumps map
+    for (auto& line : f)
+    {
+        auto tokens = tokenize(line);
+        auto& op = tokens[0];
+        if (op == "RJZ" || op == "RJNZ" || op == "RJMP")
+             if (start > lineno && start < lineno + std::stoi(tokens[1])) 
+                jumps.push_back(lineno);
+        lineno += 1;
+    }
+    auto result = f;
+    for (auto j : jumps)
+    {
+        auto tokens = tokenize(result[j]);
+        std::string op = tokens[0] + " ";
+        size_t jmp = std::stoi(tokens[1]);
+        if (j < start) jmp -= remove_count;
+        else jmp += remove_count;
+        op += std::to_string(jmp);
+        result[j] = op;
+    }
+    result.erase(result.begin() + start, result.begin() + start + remove_count);
+    removed_instructions += remove_count;
+    return result;
+}
+
+std::vector<std::string> cond_optimize(const std::vector<std::string>& func)
+{
+    auto f = func;
+    for (size_t i = 2; i < f.size(); ++i)
+    {
+        if (tokenize(f[i])[0] == "POP" &&
+            tokenize(f[i - 1])[0] == "RJZ")
+        {
+            auto tokens = tokenize(f[i - 2]);
+            if (tokens[0] == "PUSHCI" && std::stoi(tokens[1]) > 0)
+            {
+                f = remove_instructions(f, i - 2, 3);
+                i = 2;
+            }
+        }
+    }
     return f;
 }
 
-std::vector<std::string> funarg_optimize(std::vector<std::string>& f)
+std::vector<std::string> funarg_optimize(const std::vector<std::string>& f)
 {
     return f;
 }
@@ -363,11 +411,18 @@ void optimize(std::vector<std::string>& program,
     for (auto& func : functions)
     {
         func = cond_optimize(func);
-        func = funarg_optimize(func);
+        cout << "cond_optimized: removed " << removed_instructions << " instructions" << endl;
+        while (1)
+        {
+            auto newfunc = funarg_optimize(func);
+            if (newfunc == func) break;
+            func = newfunc;
+        }
+        // cout << "funarg_optimized: removed " << removed_instructions << " instructions" << endl;
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
     std::vector<std::string> program;
     std::vector<std::vector<std::string>> functions;
@@ -378,7 +433,7 @@ int main()
     											(1) 0)))").compile(program, functions);
     parse_list("(define first (lambda (x) (cond (atom? x) x (1) (car x))))").compile(program, functions);
     parse_list("(define rest  (lambda (x) (cond (atom? x) Nil (1) (cdr x))))").compile(program, functions);
-    // parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
+    // // parse_list("(define odd? (lambda (x) (eq (- x (* (/ x 2) 2)) 1)))").compile(program, functions);
     parse_list("(define not (lambda (x) (cond (eq x 0) 1 (1) 0)))").compile(program, functions);
     // parse_list("(define even? (lambda (x) (not (odd? x))))").compile(program, functions);
     // parse_list("(define square (lambda (x) (* x x)))").compile(program, functions);
@@ -463,7 +518,8 @@ int main() {
     parse_list("(print)").compile(program, functions);
     parse_list("(gc)").compile(program, functions);
     program.push_back("FIN");
-    optimize(program, functions);
+    if (argc > 1 && strcmp(argv[1],"-o") == 0)
+        optimize(program, functions);
     link(program, functions);
     for (auto x : program)
         cout << x << endl;
