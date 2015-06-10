@@ -622,6 +622,7 @@ struct VM
         static jit_value_t c1 = jit_value_create_nint_constant(main, jit_type_uint, 1);
         static jit_value_t cm1 = jit_value_create_nint_constant(main, jit_type_int, -1);
         static jit_value_t cm2 = jit_value_create_nint_constant(main, jit_type_int, -2);
+        static jit_value_t cm3 = jit_value_create_nint_constant(main, jit_type_int, -3);
         static jit_value_t ctypemask = jit_value_create_long_constant(main, jit_type_ulong, 0xF000000000000000l);
         static jit_value_t cdatamask = jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFl);
         static jit_value_t cmemthreshold = jit_value_create_nint_constant(main, jit_type_uint, (MEMORY_SIZE >> 1) - 3);
@@ -811,10 +812,15 @@ struct VM
             jit_insn_store_relative(main, v1_addr, 0, v2);
             jit_insn_store_relative(main, v2_addr, 0, v1);
         }
-        else if (op == "PUSHFS")
+        else if (op == "PUSHFS" || op == "PUSHFP")
         {
+            jit_value_t sp_v1;
             jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
-            jit_value_t sp_v1 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 1)));
+            if (op == "PUSHFS")
+                sp_v1 = jit_insn_add(main, sp, jit_value_create_nint_constant(main, jit_type_int, -(std::stoi(tokens[1]) + 1)));
+            else
+                sp_v1 = jit_insn_add(main, jit_insn_load_relative(main, jit_frame_ptr, 0, jit_type_uint), 
+                                           jit_value_create_nint_constant(main, jit_type_int, std::stoi(tokens[1])));
             jit_value_t sp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8));
             jit_value_t v1_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp_v1, c8));
             jit_value_t v1 = jit_insn_load_relative(main, v1_addr, 0, jit_type_ulong);
@@ -934,20 +940,31 @@ struct VM
             jit_value_t lambda_addr = jit_insn_and(main, lambda, jit_value_create_long_constant(main, jit_type_ulong, 0x00000000FFFFFFFFull));
             jit_value_t lambda_env = jit_insn_and(main, lambda, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFF00000000ull));
             lambda_env = jit_insn_shr(main, lambda_env, jit_value_create_nint_constant(main, jit_type_uint, 32));
+            // push ip, setting cell type to InstructionPointer
+            jit_value_t ip = jit_value_create_long_constant(main, jit_type_ulong, jit_jump_map[pc + 1]);
+            ip = jit_insn_or(main, ip, jit_value_create_long_constant(main, jit_type_ulong, 0x5000000000000000ull));
+            jit_insn_store_relative(main, l_addr, 0, ip);
             // push env, setting cell type to Environment
             jit_value_t env = jit_insn_convert(main, 
                                                     jit_insn_load_relative(main, jit_env_ptr, 0, jit_type_uint), 
                                                     jit_type_ulong, 0);
             env = jit_insn_or(main, env, jit_value_create_long_constant(main, jit_type_ulong, 0x6000000000000000ull));
-            jit_insn_store_relative(main, l_addr, 0, env);
-            // push ip, setting cell type to InstructionPointer
-            jit_value_t ip = jit_value_create_long_constant(main, jit_type_ulong, jit_jump_map[pc + 1]);
-            ip = jit_insn_or(main, ip, jit_value_create_long_constant(main, jit_type_ulong, 0x5000000000000000ull));
-            jit_insn_store_relative(main, jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8)), 0, ip);
+            jit_insn_store_relative(main, jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp, c8)), 0, env);
+            // push FP setting cell type to FramePointer
+            jit_value_t fp = jit_insn_convert(main, 
+                                                jit_insn_load_relative(main, jit_frame_ptr, 0, jit_type_uint), 
+                                                jit_type_ulong, 0);
+            fp = jit_insn_or(main, fp, jit_value_create_long_constant(main, jit_type_ulong, 0x7000000000000000ull));
+            jit_insn_store_relative(main, jit_insn_add(main, jit_stack_addr, 
+                                                            jit_insn_mul(main, 
+                                                                            jit_insn_add(main, sp, c1), c8)), 
+                                    0, fp);
+            // load frame pointer
+            jit_insn_store_relative(main, jit_frame_ptr, 0, jit_insn_add(main, sp1, cm1));
             // load lambda's env
             jit_insn_store_relative(main, jit_env_ptr, 0, lambda_env);
-            // we popped lambda object and pushed env + pc
-            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c1));
+            // we popped lambda object and pushed pc + env + fp
+            jit_insn_store_relative(main, jit_stack_ptr, 0, jit_insn_add(main, sp, c2));
             // branch to 'function'
             jit_insn_jump_table(main, lambda_addr, &jit_jump_table[0], jit_jump_table.size());
         }
@@ -957,20 +974,29 @@ struct VM
             jit_value_t sp = jit_insn_load_relative(main, jit_stack_ptr, 0, jit_type_uint);
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp2 = jit_insn_add(main, sp, cm2);
-            // load pc, clearing its type
-            jit_value_t pc_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
-            jit_value_t pc = jit_insn_convert(main, jit_insn_load_relative(main, pc_addr, 0, jit_type_ulong), jit_type_uint, 0);
-            pc = jit_insn_and(main, pc, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
+            jit_value_t sp3 = jit_insn_add(main, sp, cm3);
+            // load env, clearing its type
+            jit_value_t fp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
+            jit_value_t fp = jit_insn_load_relative(main, fp_addr, 0, jit_type_ulong);
+            fp = jit_insn_and(main, fp, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
             // load env, clearing its type
             jit_value_t env_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp2, c8));
             jit_value_t env = jit_insn_load_relative(main, env_addr, 0, jit_type_ulong);
             env = jit_insn_and(main, env, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
+            // load pc, clearing its type
+            jit_value_t pc_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp3, c8));
+            jit_value_t pc = jit_insn_load_relative(main, pc_addr, 0, jit_type_ulong);
+            pc = jit_insn_and(main, pc, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
+            // set fp
+            jit_insn_store_relative(main, jit_frame_ptr, 0, jit_insn_convert(main, fp, jit_type_uint, 0));
             // set env
             jit_insn_store_relative(main, jit_env_ptr, 0, jit_insn_convert(main, env, jit_type_uint, 0));
             // we popped env + pc
-            jit_insn_store_relative(main, jit_stack_ptr, 0, sp2);
+            sp3 = jit_insn_sub(main, sp3, jit_value_create_nint_constant(main, jit_type_int, std::stoi(tokens[1])));
+            jit_insn_store_relative(main, jit_stack_ptr, 0, sp3);
             // branch back
-            jit_insn_jump_table(main, pc, &jit_jump_table[0], jit_jump_table.size());
+            jit_insn_jump_table(main, jit_insn_convert(main, pc, jit_type_uint, 0), 
+                                &jit_jump_table[0], jit_jump_table.size());
         }
         else if (op == "RJMP" || op == "RJNZ" || op == "RJZ")
         {
