@@ -19,7 +19,7 @@ using std::endl;
 const size_t STACK_SIZE  = 500;
 const size_t MEMORY_SIZE = 50000;
 
-enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment };
+enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment, FramePointer };
 
 struct VM;
 
@@ -30,8 +30,9 @@ std::string type_to_string(CellType type)
     else if (type == String) return "String";
     else if (type == Lambda) return "Lambda";
     else if (type == Nil) return "Nil";
-    else if (type == InstructionPointer) return "InstructionPointer (Call)";
-    else if (type == Environment) return "Environment (Call)";
+    else if (type == InstructionPointer) return "IP  (Call)";
+    else if (type == Environment) return "ENV (Call)";
+    else if (type == FramePointer) return "FP  (Call)";
     return "Unknown";
 }
 
@@ -42,6 +43,9 @@ std::string data_to_string(const T& x)
     else if (x.type == Int) return std::to_string(x.integer);
     else if (x.type == String) return std::string(x.string);
     else if (x.type == Lambda) return std::to_string(x.lambda_addr);
+    else if (x.type == Environment) return std::to_string(x.integer);
+    else if (x.type == InstructionPointer) return std::to_string(x.integer);
+    else if (x.type == FramePointer) return std::to_string(x.integer);
     return "Unknown";
 }
 
@@ -76,6 +80,9 @@ struct Cell
     Cell(uint64_t x) : as64(x) { }
     static Cell make_integer(int x) { Cell r; r.type = Int; r.integer = x; return r; }
     static Cell make_nil() { Cell r; r.type = Nil; return r; }
+    static Cell make_pc(size_t x) { Cell r; r.type = InstructionPointer; r.integer = x; return r; }
+    static Cell make_env(size_t x) { Cell r; r.type = Environment; r.integer = x; return r; }
+    static Cell make_fp(size_t x) { Cell r; r.type = FramePointer; r.integer = x; return r; }
     static Cell make_string(const std::string& x) { 
         Cell r;
         r.type = String; 
@@ -112,6 +119,7 @@ struct VM
     std::vector<Cell> stack;
     std::vector<Cell> heap;
     uint32_t stack_ptr;
+    uint32_t frame_ptr;
     uint32_t heap_ptr;
     uint32_t env_ptr;
     bool stop;
@@ -129,6 +137,7 @@ struct VM
     jit_function_t main;
     jit_value_t jit_stack_addr;
     jit_value_t jit_stack_ptr;
+    jit_value_t jit_frame_ptr;
     jit_value_t jit_memory_addr;
     jit_value_t jit_memory_ptr;
     jit_value_t jit_env_ptr;
@@ -138,7 +147,11 @@ struct VM
     uint32_t jit_jump_table_current_index;
 #endif
 
-    VM() :  stop(false), 
+    VM() :  stack_ptr(0),
+            frame_ptr(0),
+            env_ptr(1),
+            heap_ptr(2), // 0 - nil, 1 - global env, 2 - user data
+            stop(false), 
             pc(0), 
             ticks(0), 
             stack_historic_max_size(0), 
@@ -151,9 +164,6 @@ struct VM
     { 
         stack.resize(STACK_SIZE);
         heap.resize(MEMORY_SIZE);
-        stack_ptr = 0;
-        env_ptr = 1;
-        heap_ptr = 2; // 0 - nil, 1 - global env, 2 - user data
         // create default env
         heap[1] = Cell::make_pair(0, 0);
     }
@@ -355,9 +365,10 @@ struct VM
             dont_step_pc = true;
         }
         else if (op == "PUSHNIL") stack[stack_ptr++] = Cell::make_nil();
-        else if (op == "PUSHFS")
+        else if (op == "PUSHFS" || op == "PUSHFP")
         { 
-            stack[stack_ptr] = stack[stack_ptr - std::stoi(tokens[1]) - 1];
+            if (op == "PUSHFS") stack[stack_ptr] = stack[stack_ptr - std::stoi(tokens[1]) - 1];
+            else stack[stack_ptr] = stack[frame_ptr + std::stoi(tokens[1])];
             stack_ptr += 1;
         }
         else if (op == "FIN") stop = true;
@@ -373,17 +384,20 @@ struct VM
             pc = cell.lambda_addr;
             if (cell.lambda_env) env_ptr = cell.lambda_env;
             else return panic(op, "Lambda has no bound env");
-            stack[stack_ptr++] = Cell::make_integer(old_pc + 1);
-            Cell oenv = Cell::make_integer(oldenv);
-            oenv.type = Environment;
-            stack[stack_ptr++] = oenv;
+            size_t old_frame_ptr = frame_ptr;
+            frame_ptr = stack_ptr - 1; // points to the element before lambda being called
+            stack[stack_ptr++] = Cell::make_pc(old_pc + 1);
+            stack[stack_ptr++] = Cell::make_env(oldenv);
+            stack[stack_ptr++] = Cell::make_fp(old_frame_ptr);
             dont_step_pc = true;                        
         }
         else if (op == "RET")
         {
-            // migrate env from stack to memory
+            const size_t stack_ptr_offset = std::stoi(tokens[1]);
+            frame_ptr = stack[--stack_ptr].integer;
             env_ptr = stack[--stack_ptr].integer;
             pc = stack[--stack_ptr].integer;
+            stack_ptr -= stack_ptr_offset;
             dont_step_pc = true;
         }
         else if (op == "POP")
@@ -420,6 +434,7 @@ struct VM
         // jit_dump_function(stdout, main, "program");
         const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
         cout << "PC: " << pc << endl;
+        cout << "Ticks: " << ticks << endl;
         cout << "JIT time: " << jit_time << " us" << endl;
         cout << "Execution time: " << execution_time<< " us" << endl;
         cout << "GC ran: " << gc_count << " time(s)" << endl;
@@ -552,6 +567,11 @@ struct VM
         stack_ptr_const.type = jit_type_void_ptr;
         stack_ptr_const.un.ptr_value = &stack_ptr;
         jit_stack_ptr = jit_value_create_constant(main, &stack_ptr_const);
+        // bind jit frame pointer
+        jit_constant_t frame_ptr_const;
+        frame_ptr_const.type = jit_type_void_ptr;
+        frame_ptr_const.un.ptr_value = &frame_ptr;
+        jit_frame_ptr = jit_value_create_constant(main, &frame_ptr_const);
         // bind jit memory pointer
         jit_constant_t memory_ptr_const;
         memory_ptr_const.type = jit_type_void_ptr;

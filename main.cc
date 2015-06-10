@@ -233,30 +233,32 @@ void Cell::compile(std::vector<std::string>& program,
             {
                 // create new environment and bind arguments
                 const size_t args_count = list[1].list.size();
+                size_t retcount = 0;
                 std::vector<std::string> func;
                 for (size_t i = 0; i < args_count; ++i)
                 {
                     func.push_back("LOADENV");
-                    func.push_back("PUSHFS " + std::to_string(2 + args_count - i)); // 2 - PC and env
+                    func.push_back("PUSHFS " + std::to_string(3 + args_count - i)); // 3 - PC, env and fp
                     func.push_back("PUSHS " + list[1].list[i].name);
                     func.push_back("CONS");
                     func.push_back("CONS");
                     func.push_back("STOREENV");
                 }
-                // pop arguments from the stack
-                for (size_t i = 0; i < args_count; ++i)
-                {
-                    func.push_back("SWAP 1");
-                    func.push_back("POP");
-                }
-                if (args_count % 2)
-                    func.push_back("SWAP 0");                
                 // compile body
                 list[2].compile(func, functions);
-                // SWAP pc and result
-                func.push_back("SWAP 1"); 
-                func.push_back("SWAP 0"); 
-                func.push_back("RET");
+                if (args_count == 0)
+                {
+                    func.push_back("SWAP 2");
+                    func.push_back("SWAP 1");
+                    func.push_back("SWAP 0");
+                }
+                else
+                {
+                    func.push_back("SWAP " + std::to_string(2 + args_count));
+                    func.push_back("POP");
+                    retcount = args_count - 1;
+                }
+                func.push_back("RET " + std::to_string(retcount));
                 functions.push_back(func);
                 program.push_back("PUSHL " + std::to_string(functions.size() - 1));
             }
@@ -401,8 +403,23 @@ std::vector<std::string> cond_optimize(const std::vector<std::string>& func)
     return f;
 }
 
+std::vector<std::string> get_function_arguments(const std::vector<std::string>& f)
+{
+    std::vector<std::string> bound_names;
+    for (size_t i = 5; i < f.size(); ++i)
+        if (f[i] == "STOREENV" &&
+            f[i - 1] == "CONS" &&
+            f[i - 2] == "CONS" &&
+            tokenize(f[i - 3])[0] == "PUSHS" &&
+            tokenize(f[i - 4])[0] == "PUSHFS" &&
+            f[i - 5] == "LOADENV")
+            bound_names.push_back(tokenize(f[i - 3])[1]);
+    return bound_names;    
+}
+
 std::vector<std::string> funarg_optimize(const std::vector<std::string>& f)
 {
+    const std::vector<std::string> bound_names = get_function_arguments(f);
     return f;
 }
 
@@ -464,7 +481,7 @@ int main(int argc, char** argv)
         parse_list(form.c_str()).compile(program, functions);
     program.push_back("FIN");
     // optionally optimize the program
-    if (argc > 1 && strcmp(argv[1],"-o") == 0)
+    //if (argc > 1 && strcmp(argv[1],"-o") == 0)
         optimize(program, functions);
     // link program
     link(program, functions);
