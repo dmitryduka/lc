@@ -16,8 +16,8 @@
 using std::cout;
 using std::endl;
 
-const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 20000;
+const size_t STACK_SIZE  = 1000;
+const size_t MEMORY_SIZE = 100000;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment, FramePointer };
 
