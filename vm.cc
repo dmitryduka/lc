@@ -17,7 +17,7 @@ using std::cout;
 using std::endl;
 
 const size_t STACK_SIZE  = 500;
-const size_t MEMORY_SIZE = 50000;
+const size_t MEMORY_SIZE = 20000;
 
 enum CellType : uint8_t { Nil, Pair, Int, String, Lambda, InstructionPointer, Environment, FramePointer };
 
@@ -389,7 +389,7 @@ struct VM
             stack[stack_ptr++] = Cell::make_pc(old_pc + 1);
             stack[stack_ptr++] = Cell::make_env(oldenv);
             stack[stack_ptr++] = Cell::make_fp(old_frame_ptr);
-            dont_step_pc = true;                        
+            dont_step_pc = true;
         }
         else if (op == "RET")
         {

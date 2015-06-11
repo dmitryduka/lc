@@ -235,6 +235,8 @@ void Cell::compile(std::vector<std::string>& program,
                 const size_t args_count = list[1].list.size();
                 size_t retcount = 0;
                 std::vector<std::string> func;
+                func.push_back("LOADENV");
+                func.push_back("STOREENV");
                 for (size_t i = 0; i < args_count; ++i)
                 {
                     func.push_back("LOADENV");
@@ -380,6 +382,7 @@ std::vector<std::string> remove_instructions(std::vector<std::string>& f, size_t
         result[j] = op;
     }
     result.erase(result.begin() + start, result.begin() + start + remove_count);
+    removed_instructions += remove_count;
     return result;
 }
 
@@ -395,7 +398,6 @@ std::vector<std::string> cond_optimize(const std::vector<std::string>& func)
             if (tokens[0] == "PUSHCI" && std::stoi(tokens[1]) > 0)
             {
                 f = remove_instructions(f, i - 2, 3);
-                removed_instructions += 3;
                 i = 2;
             }
         }
@@ -417,9 +419,63 @@ std::vector<std::string> get_function_arguments(const std::vector<std::string>& 
     return bound_names;    
 }
 
-std::vector<std::string> funarg_optimize(const std::vector<std::string>& f)
+std::vector<std::string> funarg_optimize(const std::vector<std::string>& func)
 {
+    auto f = func;
     const std::vector<std::string> bound_names = get_function_arguments(f);
+
+    // check this function doesn't produce lambda
+    // otherwise we can't remove argument binding to env
+    // but we still can use FP to take arguments from stack
+    // rather than deferencing them from env
+    bool produces_lambda = false;
+    for (auto line : f)
+    {
+        auto tokens = tokenize(line);
+        if (tokens[0] == "PUSHL" && tokens[1] != "-1")
+            produces_lambda = true;
+    }
+
+    if (!produces_lambda)
+        for (size_t i = 5; i < f.size(); ++i)
+            if (f[i] == "STOREENV" &&
+                f[i - 1] == "CONS" &&
+                f[i - 2] == "CONS" &&
+                tokenize(f[i - 3])[0] == "PUSHS" &&
+                tokenize(f[i - 4])[0] == "PUSHFS" &&
+                f[i - 5] == "LOADENV")
+            {
+                f = remove_instructions(f, i - 5, 6);
+                i = 4;       
+            }
+
+    for (size_t i = 14; i < f.size(); ++i)
+        if (f[i] == "POP" &&
+            tokenize(f[i - 1])[0] == "SWAP" &&
+            f[i - 2] == "CDR" &&
+            f[i - 3] == "POP" &&
+            f[i - 4] == "POP" &&
+            tokenize(f[i - 5])[0] == "RJMP" &&
+            f[i - 6] == "CDR" &&
+            f[i - 7] == "POP" &&
+            f[i - 8] == "POP" &&
+            f[i - 9] == "POP" &&
+            tokenize(f[i - 10])[0] == "RJNZ" &&
+            tokenize(f[i - 11])[0] == "EQSI" &&
+            f[i - 12] == "PUSHCAR" &&
+            f[i - 13] == "PUSHCAR" &&
+            f[i - 14] == "LOADENV")
+    {
+        const std::string name = tokenize(f[i - 11])[1];
+        auto it = std::find(bound_names.begin(), bound_names.end(), name);
+        if (it != bound_names.end())
+        {
+            size_t index = it - bound_names.begin();
+            f = remove_instructions(f, i - 14, 14);
+            f[i - 14] = std::string("PUSHFP ") + std::to_string(-int32_t(bound_names.size() - index - 1));
+            i = 13;
+        }
+    }    
     return f;
 }
 
@@ -481,7 +537,7 @@ int main(int argc, char** argv)
         parse_list(form.c_str()).compile(program, functions);
     program.push_back("FIN");
     // optionally optimize the program
-    //if (argc > 1 && strcmp(argv[1],"-o") == 0)
+    if (argc > 1 && strcmp(argv[1],"-o") == 0)
         optimize(program, functions);
     // link program
     link(program, functions);
