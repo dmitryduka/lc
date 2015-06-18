@@ -209,12 +209,37 @@ struct VM
 #if WITH_JIT
         if (ctx)
         {
+            // iterate over blocks and remember jump tables
+            // ...
+            // iterate over blocks and optimize them
+            {
+                jit_block_t previous = nullptr;
+                int n = 0;
+                    FILE* out = fopen("temp.il", "w");
+                while (jit_block_t block = jit_block_next(main, previous))
+                {
+                    jit_insn_iter_t it;
+                    jit_insn_iter_init(&it, block);
+                    while (1)
+                    {
+                        jit_insn_t op = jit_insn_iter_next(&it);
+                        if (!op) break;
+                        jit_dump_insn(out, main, op);
+                        fprintf(out, "\n");
+                    }
+                    previous = block;
+
+                    // call optimize here
+                    // ...
+                }
+                    fclose(out);
+            }
             jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
             jit_function_compile(main);
             jit_int result = 0;
             jit_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
             auto start = std::chrono::steady_clock::now();
-            jit_function_apply(main, nullptr, &result);
+            // jit_function_apply(main, nullptr, &result);
             auto diff = std::chrono::steady_clock::now() - start;
             execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
         }
@@ -430,8 +455,8 @@ struct VM
     
     void debug()
     {
-        // cout << "Disassembly:" << endl;
-        // jit_dump_function(stdout, main, "program");
+        cout << "Disassembly:" << endl;
+        jit_dump_function(stdout, main, "program");
         const size_t offset = (gc_count & 1) ? (MEMORY_SIZE >> 1) : 0;
         cout << "PC: " << pc << endl;
         cout << "Ticks: " << ticks << endl;
@@ -628,6 +653,11 @@ struct VM
         static jit_value_t cmemthreshold = jit_value_create_nint_constant(main, jit_type_uint, (MEMORY_SIZE >> 1) - 3);
 
         const std::string op = tokens[0];
+
+        // create new block for each instruction
+        // jit_insn_new_block(main);
+        // jit_block_t block = jit_function_get_current(main);
+        // jit_block_set_meta(block, 10001, const_cast<char*>(instruction.c_str()), [](void* ptr) {});
 
         // for operations allocating heap space, check if we need to start GC
         if (op == "CONS" || op == "DEF" || op == "STOREENV")
@@ -975,7 +1005,7 @@ struct VM
             jit_value_t sp1 = jit_insn_add(main, sp, cm1);
             jit_value_t sp2 = jit_insn_add(main, sp, cm2);
             jit_value_t sp3 = jit_insn_add(main, sp, cm3);
-            // load env, clearing its type
+            // load fp, clearing its type
             jit_value_t fp_addr = jit_insn_add(main, jit_stack_addr, jit_insn_mul(main, sp1, c8));
             jit_value_t fp = jit_insn_load_relative(main, fp_addr, 0, jit_type_ulong);
             fp = jit_insn_and(main, fp, jit_value_create_long_constant(main, jit_type_ulong, 0x0FFFFFFFFFFFFFFFull));
@@ -1038,7 +1068,8 @@ int main(int argc, char** argv)
     while (std::getline(std::cin, line))
        program.push_back(line);
 #if WITH_JIT
-    if (argc > 1 && strcmp(argv[1],"-j") == 0) vm.init_jit();
+    // if (argc > 1 && strcmp(argv[1],"-j") == 0) 
+        vm.init_jit();
 #endif
     vm.run(program);
     vm.debug();

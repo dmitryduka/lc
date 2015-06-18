@@ -21,6 +21,6 @@
 (define inloop (lambda (l x n) (cons (setnth n l (% x n)) (+ (* 10 (nth (- n 1) l)) (/ x n)))))
 (define mnloop (lambda (l x n) (cond (eq n 1)  (inloop l x n) (1) (begin (define r (inloop l x n)) (mnloop (car r) (cdr r) (- n 1))))))
 (define otloop (lambda (l x n) (cond (eq n 10) (print) (1) (begin (define r (mnloop l x n)) (print (cdr r)) (otloop (car r) (cdr r) (- n 1))))))
-(define l1 (cons 0 (cons 2 (gen1 107))))
-(otloop l1 0 108)
+(define l1 (cons 0 (cons 2 (gen1 37))))
+(otloop l1 0 38)
 (gc)
