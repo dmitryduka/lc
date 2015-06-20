@@ -87,7 +87,8 @@ Symbol& SymbolicEnv::operator[](const std::string& name)
 void SymbolicEnv::print()
 {
 	for (auto x : env)
-		cout << x.first << " = " << Expression(x.second).print() << endl;
+		if (x.first[0] == '*' || x.first == "SP")
+			cout << x.first << " = " << Expression(x.second).print() << endl;
 }
 
 std::vector<std::string> split(const std::string& str)
@@ -126,11 +127,15 @@ int main()
 	for (auto& line : input)
 	{
 		auto tokens = split(line);
+		if (tokens[0][0] == '*')
+			tokens[0] = std::string("*") + env[tokens[0].substr(1, std::string::npos)].print();
 		Symbol& target = env[tokens[0]];
 		// i1 = i2
 		if (tokens.size() == 3)
 		{
 			if (is_numeric(tokens[2])) target = Symbol(std::stoull(tokens[2]));
+			else if (tokens[2][0] == '*')
+				target = env[std::string("*") + env[tokens[2].substr(1, std::string::npos)].print()];
 			else target = env[tokens[2]];
 		}
 		// i1 = i2 + 2
