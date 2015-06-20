@@ -235,7 +235,7 @@ struct VM
                     fclose(out);
             }
             jit_function_set_optimization_level(main, JIT_OPTLEVEL_NORMAL);
-            jit_function_compile(main);
+            // jit_function_compile(main);
             jit_int result = 0;
             jit_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
             auto start = std::chrono::steady_clock::now();

@@ -5,7 +5,7 @@
 
 class Symbol;
 enum Op { ADD, SUB, MUL, DIV, AND, OR, XOR, NOT, UNDEFINED };
-std::vector<std::string> op_strings = { "+", "-", "*", "/", "&", "|", "^", "!", "NOP" };
+std::vector<std::string> op_strings = { " + ", " - ", " * ", " / ", " & ", " | ", " ^ ", " ! ", " NOP " };
 
 class Expression
 {
@@ -37,10 +37,12 @@ public:
 	Symbol(const Expression&);
 	Symbol(const std::string&);
 	Symbol(uint64_t);
+	Symbol(int64_t);
 	std::string print();
 	// a symbol can be a numeric, a string or an expression
-	enum Type { NUMERIC, STRING, EXPRESSION, UNDEFINED } type;
-	uint64_t 		value;
+	enum Type { SIGNED_NUMERIC, UNSIGNED_NUMERIC, STRING, EXPRESSION, UNDEFINED } type;
+	uint64_t 		uvalue;
+	int64_t 		svalue;
 	std::string 	name;
 	Expression 		expr;
 };
@@ -48,9 +50,10 @@ public:
 class SymbolicEnv
 {
 public:
-	void add(const Symbol&);
+	void add(const std::string&, const Symbol&);
 	void remove(const std::string&);
-	Symbol operator[](const std::string& name);
+	Symbol& operator[](const std::string& name);
+	void print();
 private:
 	std::unordered_map<std::string, Symbol> env;
 };
