@@ -2,10 +2,13 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include <boost/multiprecision/cpp_int.hpp>
+
+using namespace boost::multiprecision;
 
 class Symbol;
 enum Op { ADD, SUB, MUL, DIV, AND, OR, XOR, NOT, UNDEFINED };
-std::vector<std::string> op_strings = { " + ", " - ", " * ", " / ", " & ", " | ", " ^ ", " ! ", " NOP " };
+std::vector<std::string> op_strings = { "+", "-", "*", "/", "&", "|", "^", "!", "NOP" };
 
 class Expression
 {
@@ -13,6 +16,8 @@ public:
 	Expression();
 	Expression(const Symbol&);
 	Expression eval();
+
+	bool is_numeric() const;
 
 	std::string print();
 
@@ -36,13 +41,12 @@ public:
 	Symbol();
 	Symbol(const Expression&);
 	Symbol(const std::string&);
-	Symbol(uint64_t);
-	Symbol(int64_t);
+	Symbol(int128_t);
 	std::string print();
+	bool is_numeric() const;
 	// a symbol can be a numeric, a string or an expression
-	enum Type { SIGNED_NUMERIC, UNSIGNED_NUMERIC, STRING, EXPRESSION, UNDEFINED } type;
-	uint64_t 		uvalue;
-	int64_t 		svalue;
+	enum Type { NUMERIC, STRING, EXPRESSION, UNDEFINED } type;
+	int128_t 		value;
 	std::string 	name;
 	Expression 		expr;
 };

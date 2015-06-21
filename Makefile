@@ -14,7 +14,7 @@ else
 	g++ build/vm.o -lpthread -o vm
 endif
 symbolic: symbolic.cc symbolic.h
-	g++ -std=c++11 -g symbolic.cc -o symbolic
+	g++ -std=c++11 -g -O0 symbolic.cc -o symbolic
 
 clean:
 	-rm main vm

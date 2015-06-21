@@ -1,6 +1,7 @@
 #include <iostream>
 #include <algorithm>
 #include <sstream>
+
 #include "symbolic.h"
 
 using std::cout;
@@ -20,13 +21,19 @@ Expression Expression::eval()
 {
 }
 
+bool Expression::is_numeric() const
+{
+	if (symbols.size() == 1 && symbols[0].is_numeric()) return true;
+	else return false;
+}
+
 template<Op op>
 Expression op_func(const Expression& e, const Expression& x)
 {
 	Expression expr;
+	expr.op = op;
 	expr.symbols.push_back(e);
 	expr.symbols.push_back(x);
-	expr.op = op;
 	return expr;
 }
 
@@ -54,22 +61,21 @@ std::string Expression::print()
 
 Symbol::Symbol() : type(UNDEFINED) {}
 Symbol::Symbol(const std::string& x) : type(STRING), name(x) {}
-Symbol::Symbol(uint64_t x) : type(UNSIGNED_NUMERIC), uvalue(x) {}
-Symbol::Symbol(int64_t x) : type(SIGNED_NUMERIC), svalue(x) {}
+Symbol::Symbol(int128_t x) : type(NUMERIC), value(x) {}
 Symbol::Symbol(const Expression& x) : type(EXPRESSION), expr(x) {}
+bool Symbol::is_numeric() const
+{
+	if (type == NUMERIC) return true;
+	else if (type == EXPRESSION) return expr.is_numeric();
+	else return false;
+}
 std::string Symbol::print()
 {
-	if (type == UNSIGNED_NUMERIC) 
+	if (type == NUMERIC) 
 	{
 		std::stringstream stream;
-		if (uvalue > 0xFFFFFF) stream << "0x" << std::hex;
-		stream << uvalue;
-		return stream.str();
-	}
-	if (type == SIGNED_NUMERIC) 
-	{
-		std::stringstream stream;
-		stream << svalue;
+		if (value > 0xFFFFFF) stream << "0x" << std::hex;
+		stream << value;
 		return stream.str();
 	}
 	else if (type == STRING) return name;
